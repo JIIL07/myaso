@@ -11,14 +11,20 @@ from langchain.agents import AgentExecutor, create_openai_tools_agent, create_re
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from langchain_core.callbacks import CallbackManager
+from langsmith import Client
+from langchain.callbacks.tracers import LangChainTracer
 
 from src.config.settings import settings
+from src.config.langchain_settings import LangChainSettings
 from .base_agent import BaseAgent
 from agents.tools import (
     enhance_user_product_query,
     show_product_photos,
     get_client_profile,
 )
+
+langchain_settings = LangChainSettings()
 
 
 class ProductAgent(BaseAgent):
@@ -48,12 +54,24 @@ class ProductAgent(BaseAgent):
             agent_type: Тип агента - "openai-tools" или "zero-shot-react-description"
             **kwargs: Дополнительные параметры для BaseAgent
         """
+        langchain_settings.setup_langsmith_tracing()
+        
+        callbacks = None
+        if langchain_settings.langsmith_tracing_enabled and langchain_settings.langsmith_api_key:
+            langsmith_client = Client(api_key=langchain_settings.langsmith_api_key)
+            langsmith_tracer = LangChainTracer(
+                project_name=langchain_settings.langsmith_project_name,
+                client=langsmith_client,
+            )
+            callbacks = CallbackManager([langsmith_tracer])
+        
         if llm is None:
             llm = ChatOpenAI(
                 model=settings.openrouter.model_id,
                 openai_api_key=settings.openrouter.openrouter_api_key,
                 openai_api_base=settings.openrouter.base_url,
                 temperature=0.7,
+                callbacks=callbacks,
             )
 
         if tools is None:
@@ -65,6 +83,7 @@ class ProductAgent(BaseAgent):
         self.memory = memory
         self.agent_type = agent_type
         self._agent_executor: Optional[AgentExecutor] = None
+        self._callbacks = callbacks
 
     def _create_agent_executor(self) -> AgentExecutor:
         """Создаёт AgentExecutor с промптом и инструментами.
@@ -116,6 +135,7 @@ class ProductAgent(BaseAgent):
             handle_parsing_errors=True,
             max_iterations=5,
             max_execution_time=30,
+            callbacks=self._callbacks,
         )
 
         return agent_executor

@@ -167,7 +167,6 @@ async def init_conversation_v2_background(request: InitConverastionRequest):
         except Exception:
             pass
 
-        # Log output
         if trace is not None:
             try:
                 trace.update(
