@@ -19,5 +19,3 @@ class ProductAgent(BaseAgent):
 
     def _create_tools(self) -> List[Any]:
         raise NotImplementedError("ProductAgent._create_tools is not implemented yet.")
-
-

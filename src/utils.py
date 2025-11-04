@@ -276,4 +276,3 @@ def records_to_json(records):
         json_result.append(record_dict)
     
     return json_result
-
