@@ -48,7 +48,6 @@ class ProductAgent(BaseAgent):
             agent_type: Тип агента - "openai-tools" или "zero-shot-react-description"
             **kwargs: Дополнительные параметры для BaseAgent
         """
-        # Инициализируем LLM, если не передан
         if llm is None:
             llm = ChatOpenAI(
                 model=settings.openrouter.model_id,
@@ -57,7 +56,6 @@ class ProductAgent(BaseAgent):
                 temperature=0.7,
             )
 
-        # Используем стандартные tools, если не переданы
         if tools is None:
             tools = [enhance_user_product_query, show_product_photos, get_client_profile]
 
@@ -74,7 +72,6 @@ class ProductAgent(BaseAgent):
         Returns:
             AgentExecutor для выполнения агента
         """
-        # Системный промпт для менеджера по продажам
         system_prompt = """Ты профессиональный менеджер по продажам мясной продукции.
 
 Твоя задача:
@@ -91,7 +88,6 @@ class ProductAgent(BaseAgent):
 
 Всегда старайся помочь клиенту найти именно то, что он ищет."""
 
-        # Создаём промпт с системным сообщением и историей
         if self.agent_type == "openai-tools":
             prompt = ChatPromptTemplate.from_messages(
                 [
@@ -102,7 +98,7 @@ class ProductAgent(BaseAgent):
                 ]
             )
             agent = create_openai_tools_agent(self.llm, self.tools, prompt)
-        else:  # zero-shot-react-description
+        else:
             prompt = ChatPromptTemplate.from_messages(
                 [
                     ("system", system_prompt),
@@ -113,7 +109,6 @@ class ProductAgent(BaseAgent):
             )
             agent = create_react_agent(self.llm, self.tools, prompt)
 
-        # Создаём AgentExecutor
         agent_executor = AgentExecutor(
             agent=agent,
             tools=self.tools,
@@ -139,11 +134,9 @@ class ProductAgent(BaseAgent):
             Exception: При ошибке выполнения агента
         """
         try:
-            # Инициализируем AgentExecutor, если ещё не создан
             if self._agent_executor is None:
                 self._agent_executor = self._create_agent_executor()
 
-            # Загружаем историю через memory
             chat_history: List[BaseMessage] = []
             if self.memory is not None:
                 try:
@@ -153,7 +146,6 @@ class ProductAgent(BaseAgent):
                     print(f"Warning: Failed to load memory: {e}")
                     chat_history = []
 
-            # Загружаем профиль клиента через tool
             profile_context = ""
             try:
                 profile_result = await get_client_profile.ainvoke({"phone": client_phone})
@@ -162,12 +154,10 @@ class ProductAgent(BaseAgent):
             except Exception as e:
                 print(f"Warning: Failed to load client profile: {e}")
 
-            # Формируем входной запрос с контекстом профиля
             input_with_context = user_input
             if profile_context:
                 input_with_context = f"{profile_context}\n{user_input}"
 
-            # Запускаем агента
             try:
                 result = await self._agent_executor.ainvoke(
                     {
@@ -180,17 +170,13 @@ class ProductAgent(BaseAgent):
                 print(f"AgentExecutor error: {error_msg}")
                 raise Exception(error_msg) from e
 
-            # Извлекаем ответ из результата
             response_text = result.get("output", "")
             if not response_text:
                 response_text = "Извините, произошла ошибка при обработке запроса."
 
-            # Сохраняем сообщения в memory
             if self.memory is not None:
                 try:
-                    # Сохраняем сообщение пользователя
                     await self.memory.add_messages([HumanMessage(content=user_input)])
-                    # Сохраняем ответ агента
                     await self.memory.add_messages([AIMessage(content=response_text)])
                 except Exception as e:
                     print(f"Warning: Failed to save to memory: {e}")
@@ -216,7 +202,6 @@ class ProductAgent(BaseAgent):
         Returns:
             Строка с промптом
         """
-        # Промпт формируется в _create_agent_executor, здесь возвращаем базовый
         return user_input
 
     def _create_tools(self) -> List[Any]:
