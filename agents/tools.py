@@ -109,35 +109,39 @@ async def show_product_photos(product_titles: List[str], phone: str) -> str:
             not_found.append(title)
             continue
 
-        product = response.data[0]
-        photo_url = product.get("photo")
+        found_with_photo = False
+        for product in response.data:
+            photo_url = product.get("photo")
+            
+            if photo_url:
+                try:
+                    requests.post(
+                        url="http://51.250.42.45:2026/sendImage",
+                        json={
+                            "recipient": phone,
+                            "image_url": photo_url,
+                            "caption": title,
+                        },
+                        timeout=10,
+                    )
+                    found_with_photo = True
+                except Exception as e:
+                    print(f"Ошибка отправки фото для {title}: {e}")
 
-        if photo_url:
-            try:
-                requests.post(
-                    url="http://51.250.42.45:2026/sendImage",
-                    json={
-                        "recipient": phone,
-                        "image_url": photo_url,
-                        "caption": title,
-                    },
-                    timeout=10,
-                )
-                has_photo.append(title)
-            except Exception as e:
-                no_photo.append(f"{title} (ошибка отправки: {str(e)})")
+        if found_with_photo:
+            has_photo.append(title)
         else:
             no_photo.append(title)
 
     result_parts = []
     if has_photo:
-        result_parts.append(f"Фотографии отправлены: {', '.join(has_photo)}")
+        result_parts.append(f"Фотографии следующих товаров отправлены: {', '.join(has_photo)}")
     if no_photo:
-        result_parts.append(f"Нет фотографий: {', '.join(no_photo)}")
+        result_parts.append(f"Нет фотографий следующих товаров: {', '.join(no_photo)}")
     if not_found:
         result_parts.append(f"Товары не найдены: {', '.join(not_found)}")
 
-    return " | ".join(result_parts) if result_parts else "Нет товаров для отправки фотографий."
+    return "\n".join(result_parts) if result_parts else "Нет товаров для отправки фотографий."
 
 
 @tool
