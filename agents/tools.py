@@ -7,12 +7,15 @@ from __future__ import annotations
 
 from typing import List
 import logging
-import requests
+import os
+import httpx
+import asyncpg
 from langchain_core.tools import tool
 from supabase import create_client, Client, ClientOptions, acreate_client, AClient, AsyncClientOptions
 
 from src.config.settings import settings
 from src.utils.langchain_retrievers import SupabaseVectorRetriever
+from src.utils import records_to_json
 
 logger = logging.getLogger(__name__)
 
@@ -152,15 +155,15 @@ async def show_product_photos(product_titles: List[str], phone: str) -> str:
             
             if photo_url:
                 try:
-                    requests.post(
-                        url=settings.whatsapp.send_image_url,
-                        json={
-                            "recipient": phone,
-                            "image_url": photo_url,
-                            "caption": title,
-                        },
-                        timeout=10,
-                    )
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        await client.post(
+                            url=settings.whatsapp.send_image_url,
+                            json={
+                                "recipient": phone,
+                                "image_url": photo_url,
+                                "caption": title,
+                            },
+                        )
                     found_with_photo = True
                 except Exception as e:
                     logger.warning(f"Ошибка отправки фото для {title}: {e}")
@@ -283,37 +286,33 @@ async def get_random_products(limit: int = 10) -> str:
     Returns:
         Строка с отформатированным списком случайных товаров
     """
-    import asyncpg
-    import os
-    from src.utils import records_to_json
-    
-    db_dsn = os.getenv("POSTGRES_DSN")
+    db_dsn = os.getenv("POSTGRES_DSN") or None
     if not db_dsn:
         return "Не настроено подключение к базе данных."
     
     conn = None
     try:
         conn = await asyncpg.connect(dsn=db_dsn)
-        
-        sql_request = f"""
-        SELECT 
-            id,
-            title,
-            supplier_name,
-            from_region,
-            photo,
-            order_price_kg,
-            min_order_weight_kg,
-            cooled_or_frozen,
-            ready_made,
-            package_type,
-            discount
-        FROM myaso.products
-        ORDER BY RANDOM()
-        LIMIT {limit};
-        """
-        
-        result = await conn.fetch(sql_request)
+        result = await conn.fetch(
+            """
+            SELECT 
+                id,
+                title,
+                supplier_name,
+                from_region,
+                photo,
+                order_price_kg,
+                min_order_weight_kg,
+                cooled_or_frozen,
+                ready_made,
+                package_type,
+                discount
+            FROM myaso.products
+            ORDER BY RANDOM()
+            LIMIT $1
+            """,
+            limit
+        )
         json_result = records_to_json(result)
         
         if not json_result:

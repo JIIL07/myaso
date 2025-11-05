@@ -25,12 +25,16 @@ sys.modules['langchain.callbacks.tracers'] = mock_langchain_callbacks.tracers
 mock_utils_package = MagicMock()
 mock_utils_package.langchain_retrievers = MagicMock()
 mock_utils_package.langchain_retrievers.SupabaseVectorRetriever = MagicMock()
+mock_utils_package.prompts = MagicMock()
+mock_utils_package.prompts.get_prompt = MagicMock()
+mock_utils_package.prompts.get_all_system_values = MagicMock()
+mock_utils_package.prompts.build_prompt_with_context = MagicMock()
 
 if 'src.utils' not in sys.modules:
     sys.modules['src.utils'] = mock_utils_package
 sys.modules['src.utils.langchain_retrievers'] = mock_utils_package.langchain_retrievers
+sys.modules['src.utils.prompts'] = mock_utils_package.prompts
 
-import os
 test_env = {
     'SUPABASE_URL': 'http://localhost:54321',
     'SUPABASE_ANON_KEY': 'test-key',

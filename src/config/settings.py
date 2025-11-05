@@ -58,13 +58,18 @@ class AlibabaSettings(BaseSettings):
 
 class WhatsAppSettings(BaseSettings):
     """Настройки для интеграции с WhatsApp API."""
-    api_base_url: str = "http://51.250.42.45:2026"
+    whatsapp_api_base_url: str = ""
     send_message_endpoint: str = "/send-message"
     send_image_endpoint: str = "/sendImage"
     
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
+    
+    @property
+    def api_base_url(self) -> str:
+        """Возвращает базовый URL API WhatsApp."""
+        return self.whatsapp_api_base_url
     
     @property
     def send_message_url(self) -> str:

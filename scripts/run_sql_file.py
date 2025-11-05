@@ -8,7 +8,7 @@
 Или с кастомными параметрами:
     python scripts/run_sql_file.py <путь_к_sql_файлу> \\
         --host localhost \\
-        --port 54322 \\
+        --port 5432 \\
         --database postgres \\
         --user postgres \\
         --password postgres
@@ -129,8 +129,8 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("POSTGRES_PORT", "54322")),
-        help="Порт БД (по умолчанию: 54322 для локального Supabase)"
+        default=int(os.getenv("POSTGRES_PORT", "5432")),
+        help="Порт БД (по умолчанию: 5432 для локального Supabase)"
     )
     parser.add_argument(
         "--database",

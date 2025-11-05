@@ -6,11 +6,12 @@ from src.schemas import UserMessageRequest, InitConverastionRequest, ResetConver
 from agents.factory import AgentFactory
 from src.utils import remove_markdown_symbols
 from src.utils.langchain_memory import SupabaseConversationMemory
-from src.utils.phone_validator import normalize_phone
+from src.utils.phone_validator import normalize_phone, validate_phone
 from agents.tools import get_client_profile, enhance_user_product_query, get_random_products
 from supabase import acreate_client, AClient, AsyncClientOptions
 from src.config.settings import settings
-import requests
+from src.utils.prompts import get_prompt
+import httpx
 from langfuse import Langfuse
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ async def process_conversation_background(request: UserMessageRequest):
     logger.info(f"[processConversation] Начало обработки запроса для {request.client_phone}")
     langfuse = None
     trace = None
-    
+
     try:
         try:
             langfuse = Langfuse()
@@ -58,13 +59,14 @@ async def process_conversation_background(request: UserMessageRequest):
         logger.info(f"[processConversation] Получен ответ от агента для {request.client_phone}, длина: {len(response_text)}")
 
         try:
-            requests.post(
-                settings.whatsapp.send_message_url,
-                json={
-                    "recipient": request.client_phone,
-                    "message": remove_markdown_symbols(response_text),
-                },
-            )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(
+                    settings.whatsapp.send_message_url,
+                    json={
+                        "recipient": request.client_phone,
+                        "message": remove_markdown_symbols(response_text),
+                    },
+                )
             logger.info(f"[processConversation] Сообщение отправлено в WhatsApp для {request.client_phone}")
         except Exception as e:
             logger.warning(f"[processConversation] Ошибка отправки в WhatsApp: {e}")
@@ -80,13 +82,14 @@ async def process_conversation_background(request: UserMessageRequest):
 
     except Exception as e:
         try:
-            requests.post(
-                settings.whatsapp.send_message_url,
-                json={
-                    "recipient": request.client_phone,
-                    "message": "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
-                },
-            )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(
+                    settings.whatsapp.send_message_url,
+                    json={
+                        "recipient": request.client_phone,
+                        "message": "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
+                    },
+                )
         except Exception:
             pass
 
@@ -110,6 +113,12 @@ async def process_conversation(request: UserMessageRequest, background_tasks: Ba
     Returns:
         Словарь с результатом успешного запуска задачи
     """
+    normalized_phone = normalize_phone(request.client_phone)
+    if not validate_phone(normalized_phone):
+        logger.warning(f"[processConversation] Невалидный номер телефона: {request.client_phone}")
+        return {"success": False, "error": "Invalid phone number"}
+    
+    request.client_phone = normalized_phone
     logger.info(f"[processConversation] Получен запрос от {request.client_phone}")
     background_tasks.add_task(process_conversation_background, request)
     return {"success": True}
@@ -150,9 +159,24 @@ async def init_conversation_background(request: InitConverastionRequest):
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
 
+        db_prompt = None
+        try:
+            db_prompt = await get_prompt(request.topic)
+            if db_prompt:
+                logger.info(f"[initConversation] Загружен промпт из БД для topic '{request.topic}'")
+        except Exception as e:
+            logger.warning(f"[initConversation] Не удалось загрузить промпт для topic '{request.topic}': {e}")
+
+        profile_text = ""
+        try:
+            profile_text = await get_client_profile.ainvoke({"phone": request.client_phone})
+        except Exception as e:
+            logger.warning(f"[initConversation] Не удалось загрузить профиль: {e}")
+            profile_text = "Профиль клиента не найден."
+
         products_text = ""
         try:
-            seed_query = request.topic or "Ассортимент товаров"
+            seed_query = request.topic
             rag_text = await enhance_user_product_query.ainvoke({"query": seed_query})
             if rag_text and "не найдены" not in rag_text.lower():
                 products_text = rag_text
@@ -168,12 +192,19 @@ async def init_conversation_background(request: InitConverastionRequest):
             except Exception:
                 products_text = "Ассортимент будет обновлён позже."
 
-        welcome_input = (
-            "Сформируй короткое дружелюбное приветствие для клиента, учитывая его профиль и ассортимент.\n"
-            f"Тема диалога: {request.topic}\n\n"
-            f"Ассортимент/подборка:\n{products_text}\n\n"
-            "Поприветствуй дружелюбно со смайликами, будь позитивным и энергичным. Предложи помощь и ненавязчиво уточни запрос."
-        )
+        if db_prompt:
+            welcome_input = (
+                f"Ассортимент/подборка:\n{products_text}\n\n"
+                "Начни диалог с клиентом, используя системный промпт и ассортимент выше."
+            )
+        else:
+            welcome_input = (
+                "Сформируй короткое дружелюбное приветствие для клиента, учитывая его профиль и ассортимент.\n"
+                f"Тема диалога: {request.topic}\n\n"
+                f"Профиль клиента:\n{profile_text}\n\n"
+                f"Ассортимент/подборка:\n{products_text}\n\n"
+                "Поприветствуй дружелюбно со смайликами, будь позитивным и энергичным. Предложи помощь и ненавязчиво уточни запрос."
+            )
 
         response_text = await agent.run(
             user_input=welcome_input, 
@@ -184,13 +215,14 @@ async def init_conversation_background(request: InitConverastionRequest):
         logger.info(f"[initConversation] Получен ответ от агента для {request.client_phone}, длина: {len(response_text)}")
 
         try:
-            requests.post(
-                settings.whatsapp.send_message_url,
-                json={
-                    "recipient": request.client_phone,
-                    "message": remove_markdown_symbols(response_text),
-                },
-            )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(
+                    settings.whatsapp.send_message_url,
+                    json={
+                        "recipient": request.client_phone,
+                        "message": remove_markdown_symbols(response_text),
+                    },
+                )
             logger.info(f"[initConversation] Сообщение отправлено в WhatsApp для {request.client_phone}")
         except Exception as e:
             logger.warning(f"[initConversation] Ошибка отправки в WhatsApp: {e}")
@@ -211,13 +243,14 @@ async def init_conversation_background(request: InitConverastionRequest):
 
     except Exception as e:
         try:
-            requests.post(
-                settings.whatsapp.send_message_url,
-                json={
-                    "recipient": request.client_phone,
-                    "message": "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
-                },
-            )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(
+                    settings.whatsapp.send_message_url,
+                    json={
+                        "recipient": request.client_phone,
+                        "message": "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
+                    },
+                )
         except Exception:
             pass
 
@@ -241,6 +274,12 @@ async def init_conversation(request: InitConverastionRequest, background_tasks: 
     Returns:
         Словарь с результатом успешного запуска задачи
     """
+    normalized_phone = normalize_phone(request.client_phone)
+    if not validate_phone(normalized_phone):
+        logger.warning(f"[initConversation] Невалидный номер телефона: {request.client_phone}")
+        return {"success": False, "error": "Invalid phone number"}
+    
+    request.client_phone = normalized_phone
     logger.info(f"[initConversation] Получен запрос от {request.client_phone}, topic: {request.topic}")
     background_tasks.add_task(init_conversation_background, request)
     return {"success": True}
@@ -365,5 +404,11 @@ async def reset_conversation(request: ResetConversationRequest, background_tasks
     Returns:
         Словарь с результатом успешного запуска задачи
     """
+    normalized_phone = normalize_phone(request.client_phone)
+    if not validate_phone(normalized_phone):
+        logger.warning(f"[resetConversation] Невалидный номер телефона: {request.client_phone}")
+        return {"success": False, "error": "Invalid phone number"}
+    
+    request.client_phone = normalized_phone
     background_tasks.add_task(reset_conversation_background, request)
     return {"success": True}

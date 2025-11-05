@@ -151,7 +151,7 @@ class ProductAgent(BaseAgent):
         agent_executor = AgentExecutor(
             agent=agent,
             tools=self.tools,
-            verbose=False,
+            verbose=True,
             handle_parsing_errors=True,
             max_iterations=5,
             max_execution_time=30,
@@ -235,13 +235,7 @@ class ProductAgent(BaseAgent):
                     logger.warning(f"Не удалось загрузить память: {e}")
                     chat_history = []
             
-            profile_context_for_input = ""
-            if profile_context and not db_prompt:
-                profile_context_for_input = f"\n\nПрофиль клиента:\n{profile_context}\n"
-
             input_with_context = user_input
-            if profile_context_for_input:
-                input_with_context = f"{profile_context_for_input}{user_input}"
             full_prompt_parts = ["=== ПОЛНЫЙ ПРОМПТ К LLM ===\n"]
             full_prompt_parts.append(f"System:\n{self.SYSTEM_PROMPT}\n")
             

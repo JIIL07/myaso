@@ -47,17 +47,6 @@ class SupabaseVectorRetriever(BaseRetriever):
         self._k = k
 
         self._db_dsn = db_dsn or os.getenv("POSTGRES_DSN")
-        
-        is_local_dev = os.getenv("ENVIRONMENT", "").lower() == "local" or os.getenv("ENV", "").lower() == "local"
-        
-        if self._db_dsn and is_local_dev:
-            is_docker = os.path.exists("/.dockerenv")
-            
-            if is_docker:
-                if "localhost" in self._db_dsn:
-                    self._db_dsn = self._db_dsn.replace("localhost", "host.docker.internal")
-                elif "192.168.65." in self._db_dsn:
-                    self._db_dsn = re.sub(r'@192\.168\.65\.\d+:', r'@host.docker.internal:', self._db_dsn)
 
     async def _embed(self, text: str) -> List[float]:
         """Создаёт эмбеддинг текста используя Alibaba DashScope API.
@@ -82,17 +71,6 @@ class SupabaseVectorRetriever(BaseRetriever):
         data = completion.model_dump()
         return data["data"][0]["embedding"]
 
-    def _get_relevant_documents(self, query: str, *, run_manager: Any = None) -> List[Document]:
-        """Синхронная версия get_relevant_documents (требуется BaseRetriever).
-        
-        ВНИМАНИЕ: Эта версия не поддерживается, так как используется asyncpg.
-        Используйте aget_relevant_documents() вместо этого.
-        """
-        raise NotImplementedError(
-            "SupabaseVectorRetriever требует асинхронных операций. "
-            "Используйте aget_relevant_documents() вместо get_relevant_documents()"
-        )
-
     async def _aget_relevant_documents(self, query: str, *, run_manager: Any = None) -> List[Document]:
         """Асинхронная версия get_relevant_documents (требуется BaseRetriever).
         
@@ -103,7 +81,7 @@ class SupabaseVectorRetriever(BaseRetriever):
         Returns:
             Список Document объектов с найденными товарами
         """
-        return await self._get_relevant_documents_impl(query, k=self._k)
+        return await self._get_relevant_documents(query, k=self._k)
 
     async def get_relevant_documents(self, query: str, k: int | None = None) -> List[Document]:
         """Возвращает top-k документов по близости (LangChain Document).
@@ -119,7 +97,7 @@ class SupabaseVectorRetriever(BaseRetriever):
             k = self._k
         return await self._get_relevant_documents_impl(query, k=k)
 
-    async def _get_relevant_documents_impl(self, query: str, k: int) -> List[Document]:
+    async def _get_relevant_documents(self, query: str, k: int) -> List[Document]:
         """Внутренняя реализация получения документов."""
         vector = await self._embed(query)
 
@@ -155,10 +133,10 @@ class SupabaseVectorRetriever(BaseRetriever):
                   package_type,
                   cooled_or_frozen,
                   product_in_package,
-                  embedding <-> ($1::text::vector) AS distance
+                  embedding <-> ($1::vector) AS distance
                 FROM myaso.products
                 WHERE embedding IS NOT NULL
-                ORDER BY embedding <-> ($1::text::vector)
+                ORDER BY embedding <-> ($1::vector)
                 LIMIT $2
                 """,
                 vector_str,

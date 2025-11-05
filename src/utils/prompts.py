@@ -11,15 +11,14 @@ from src.config.settings import settings
 logger = logging.getLogger(__name__)
 
 
-async def get_prompt(name: str) -> Optional[str]:
-    """Получает промпт из таблицы myaso.prompts по имени.
+async def get_prompt(topic: str) -> Optional[str]:
+    """Получает промпт из таблицы myaso.prompts по topic.
     
     Args:
-        name: Название промпта (например, "Продать", "Узнать потребность", 
-              "Получить товары при инициализации диалога")
+        topic: Значение колонки topic из таблицы prompts (например, "Продать", "Узнать потребность")
     
     Returns:
-        Текст промпта или None, если промпт не найден
+        Текст промпта из колонки prompt или None, если промпт не найден
     """
     try:
         supabase: AClient = await acreate_client(
@@ -28,15 +27,15 @@ async def get_prompt(name: str) -> Optional[str]:
             options=AsyncClientOptions(schema="myaso")
         )
         
-        result = await supabase.table("prompts").select("prompt, value").eq("topic", name).execute()
+        result = await supabase.table("prompts").select("prompt").eq("topic", topic).execute()
         
         if result.data and len(result.data) > 0:
             row = result.data[0]
-            return row.get("prompt") or row.get("value")
+            return row.get("prompt")
         
         return None
     except Exception as e:
-        logger.error(f"Ошибка при получении промпта '{name}': {e}")
+        logger.error(f"Ошибка при получении промпта для topic '{topic}': {e}")
         return None
 
 
@@ -125,7 +124,7 @@ def build_prompt_with_context(
     ==========================================================================================================
     CLIENT INFO: {client_info} (только если client_info is not None)
     ==========================================================================================================
-    SYSTEM VARIABLES: {system_vars или "No system variables available"} (всегда показывается)
+    SYS VARIABLES: {system_vars или "No system variables available"} (всегда показывается)
     ==========================================================================================================
     
     {base_prompt}

@@ -6,7 +6,6 @@ services:
     ports:
       - "2025:8000"
     environment:
-      - ENVIRONMENT=${ENVIRONMENT:-local}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}

@@ -116,25 +116,21 @@ class TestProductAgentToolCalling:
     @pytest.mark.asyncio
     async def test_run_without_memory(self, agent, mock_agent_executor):
         """Тест выполнения агента без памяти."""
-        # Настройка ответа executor
         mock_agent_executor.ainvoke.return_value = {
             "output": "Извините, товары не найдены."
         }
 
-        # Патчим get_client_profile, чтобы избежать реальных вызовов Supabase
         with patch("agents.product_agent.get_client_profile") as mock_get_profile:
             mock_get_profile.ainvoke = AsyncMock(return_value="Профиль клиента не найден в базе данных.")
             
             result = await agent.run("Покажи мне стейки", "+1234567890")
 
-        # Проверки
         assert result == "Извините, товары не найдены."
         mock_agent_executor.ainvoke.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_run_with_memory(self, agent, mock_agent_executor):
         """Тест выполнения агента с памятью."""
-        # Настройка памяти
         mock_memory = AsyncMock()
         mock_memory.load_memory_variables = AsyncMock(
             return_value={"history": [HumanMessage(content="Привет"), AIMessage(content="Здравствуйте!")]}
@@ -146,14 +142,11 @@ class TestProductAgentToolCalling:
             "output": "Вот список стейков."
         }
 
-        # Патчим get_client_profile, чтобы избежать реальных вызовов Supabase
         with patch("agents.product_agent.get_client_profile") as mock_get_profile:
             mock_get_profile.ainvoke = AsyncMock(return_value="Профиль клиента не найден в базе данных.")
             
-            # Выполнение
             result = await agent.run("Покажи стейки", "+1234567890")
 
-        # Проверки
         assert result == "Вот список стейков."
         mock_memory.load_memory_variables.assert_called_once()
         mock_memory.add_messages.assert_called()
@@ -165,31 +158,24 @@ class TestProductAgentToolCalling:
             "output": "Учитывая ваш профиль, вот подходящие товары."
         }
 
-        # Патчим get_client_profile, чтобы избежать реальных вызовов Supabase
         with patch("agents.product_agent.get_client_profile") as mock_get_profile:
             mock_get_profile.ainvoke = AsyncMock(return_value="Имя: Иван\nГород: Москва")
             
-            # Выполнение
             result = await agent.run("Что у вас есть?", "+1234567890")
 
-        # Проверки
         assert result == "Учитывая ваш профиль, вот подходящие товары."
         mock_agent_executor.ainvoke.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_run_with_error_handling(self, agent, mock_agent_executor):
         """Тест обработки ошибок при выполнении агента."""
-        # Настройка ошибки
         mock_agent_executor.ainvoke.side_effect = Exception("Ошибка выполнения")
 
-        # Патчим get_client_profile, чтобы избежать реальных вызовов Supabase
         with patch("agents.product_agent.get_client_profile") as mock_get_profile:
             mock_get_profile.ainvoke = AsyncMock(return_value="Профиль клиента не найден в базе данных.")
             
-            # Выполнение
             result = await agent.run("Тест", "+1234567890")
 
-        # Проверки
         assert "пошло не так" in result.lower() or "напишите еще раз" in result.lower()
 
 
@@ -227,7 +213,6 @@ class TestProductAgentSimpleRequest:
             "output": "Здравствуйте! Чем могу помочь?"
         }
 
-        # Патчим get_client_profile, чтобы избежать реальных вызовов Supabase
         with patch("agents.product_agent.get_client_profile") as mock_get_profile:
             mock_get_profile.ainvoke = AsyncMock(return_value="Профиль клиента не найден в базе данных.")
             
@@ -242,10 +227,9 @@ class TestProductAgentSimpleRequest:
             "output": "Найдено товаров: 3\n\nСтейк Рибай\nЦена: 500 руб/кг"
         }
 
-        # Патчим get_client_profile, чтобы избежать реальных вызовов Supabase
         with patch("agents.product_agent.get_client_profile") as mock_get_profile:
             mock_get_profile.ainvoke = AsyncMock(return_value="Профиль клиента не найден в базе данных.")
-            
+
             result = await agent.run("Покажи стейки", "+1234567890")
 
         assert "Найдено" in result or "Стейк" in result
@@ -257,7 +241,6 @@ class TestProductAgentSimpleRequest:
             "output": "Фотографии отправлены"
         }
 
-        # Патчим get_client_profile, чтобы избежать реальных вызовов Supabase
         with patch("agents.product_agent.get_client_profile") as mock_get_profile:
             mock_get_profile.ainvoke = AsyncMock(return_value="Профиль клиента не найден в базе данных.")
             
@@ -305,26 +288,20 @@ class TestProductAgentToolsMocking:
         }
         
         with patch("agents.tools.acreate_client") as mock_create_client:
-            # Создаем цепочку моков для Supabase query builder
             mock_eq = MagicMock()
             mock_select = MagicMock()
             mock_table = MagicMock()
             
-            # execute() - это асинхронная функция
             mock_execute_result = MagicMock()
             mock_execute_result.data = [mock_profile_data]
             mock_eq.execute = AsyncMock(return_value=mock_execute_result)
             
-            # Настраиваем цепочку вызовов
             mock_table.select.return_value = mock_select
             mock_select.eq.return_value = mock_eq
             
-            # mock_supabase должен быть AsyncMock для await acreate_client
-            # но table() должен быть синхронным методом (не корутиной)
             mock_supabase = AsyncMock()
             mock_supabase.table = MagicMock(return_value=mock_table)
             
-            # acreate_client должен возвращать mock_supabase
             mock_create_client.return_value = mock_supabase
             
             result = await get_client_profile.ainvoke({"phone": "+1234567890"})
@@ -335,12 +312,11 @@ class TestProductAgentToolsMocking:
     async def test_show_product_photos_mock(self):
         """Тест мокирования show_product_photos."""
         with patch("agents.tools.supabase_client") as mock_supabase, \
-             patch("agents.tools.requests.post") as mock_post:
+             patch("agents.tools.httpx.AsyncClient") as mock_httpx_client:
             
             mock_table = MagicMock()
             mock_select = MagicMock()
             mock_eq = MagicMock()
-            mock_execute = MagicMock()
             
             mock_supabase.table.return_value = mock_table
             mock_table.select.return_value = mock_select
@@ -349,7 +325,10 @@ class TestProductAgentToolsMocking:
                 {"title": "Стейк Рибай", "photo": "http://example.com/photo.jpg"}
             ])
             
-            mock_post.return_value.status_code = 200
+            mock_client_instance = AsyncMock()
+            mock_client_instance.post = AsyncMock()
+            mock_httpx_client.return_value.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_httpx_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
             result = await show_product_photos.ainvoke({
                 "product_titles": ["Стейк Рибай"],
@@ -357,4 +336,4 @@ class TestProductAgentToolsMocking:
             })
 
             assert len(result) > 0
-            mock_post.assert_called()
+            mock_client_instance.post.assert_called()
