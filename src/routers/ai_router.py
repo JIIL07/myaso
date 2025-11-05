@@ -1,48 +1,73 @@
 from fastapi import APIRouter, BackgroundTasks
-from src.schemas import UserMessageRequest
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
+import logging
+from src.schemas import UserMessageRequest, InitConverastionRequest, ResetConversationRequest
 from agents.factory import AgentFactory
 from src.utils import remove_markdown_symbols
+from src.utils.langchain_memory import SupabaseConversationMemory
+from src.utils.phone_validator import normalize_phone
+from agents.tools import get_client_profile, enhance_user_product_query, get_random_products
+from supabase import acreate_client, AClient, AsyncClientOptions
+from src.config.settings import settings
 import requests
 from langfuse import Langfuse
 
-router = APIRouter(prefix="/ai/v2")
+logger = logging.getLogger(__name__)
 
-# LangChain version - Process conversation
-async def process_conversation_v2_background(request: UserMessageRequest):
+router = APIRouter(prefix="/ai")
+
+
+async def process_conversation_background(request: UserMessageRequest):
+    """Обрабатывает запрос пользователя в фоновом режиме.
+    
+    Args:
+        request: Запрос с сообщением пользователя и номером телефона
+    """
+    logger.info(f"[processConversation] Начало обработки запроса для {request.client_phone}")
     langfuse = None
     trace = None
+    
     try:
         try:
             langfuse = Langfuse()
             trace = langfuse.trace(
-                name="processConversation_v2",
+                name="processConversation",
                 user_id=request.client_phone,
                 input={
                     "client_phone": request.client_phone,
                     "message": request.message,
                 },
-                tags=["langchain", "agent", "v2"],
+                tags=["langchain", "agent"],
             )
         except Exception as _:
             langfuse = None
             trace = None
 
+        memory = await SupabaseConversationMemory(request.client_phone)
+        
         factory = AgentFactory.instance()
-        agent = factory.create_product_agent(config={})
+        agent = factory.create_product_agent(config={"memory": memory})
 
-        # Run agent
-        response_text = await agent.run(user_input=request.message, client_phone=request.client_phone)
+        response_text = await agent.run(
+            user_input=request.message, 
+            client_phone=request.client_phone,
+            topic=request.topic
+        )
+        
+        logger.info(f"[processConversation] Получен ответ от агента для {request.client_phone}, длина: {len(response_text)}")
 
         try:
             requests.post(
-                "http://51.250.42.45:2026/send-message",
+                settings.whatsapp.send_message_url,
                 json={
                     "recipient": request.client_phone,
                     "message": remove_markdown_symbols(response_text),
                 },
             )
-        except Exception as _:
-            pass
+            logger.info(f"[processConversation] Сообщение отправлено в WhatsApp для {request.client_phone}")
+        except Exception as e:
+            logger.warning(f"[processConversation] Ошибка отправки в WhatsApp: {e}")
 
         if trace is not None:
             try:
@@ -50,15 +75,16 @@ async def process_conversation_v2_background(request: UserMessageRequest):
             except Exception:
                 pass
 
+        logger.info(f"[processConversation] Завершение обработки для {request.client_phone}")
         return {"success": True}
 
     except Exception as e:
         try:
             requests.post(
-                "http://51.250.42.45:2026/send-message",
+                settings.whatsapp.send_message_url,
                 json={
                     "recipient": request.client_phone,
-                    "message": "Что-то барахлит вотсап 😞. Пожалуйста, отправьте сообщение ещё раз",
+                    "message": "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
                 },
             )
         except Exception:
@@ -74,19 +100,28 @@ async def process_conversation_v2_background(request: UserMessageRequest):
 
 
 @router.post("/processConversation", status_code=200)
-async def process_conversation_v2(request: UserMessageRequest, background_tasks: BackgroundTasks):
-    background_tasks.add_task(process_conversation_v2_background, request)
+async def process_conversation(request: UserMessageRequest, background_tasks: BackgroundTasks):
+    """Обрабатывает запрос пользователя и запускает фоновую задачу.
+    
+    Args:
+        request: Запрос с сообщением пользователя
+        background_tasks: Фоновые задачи FastAPI
+        
+    Returns:
+        Словарь с результатом успешного запуска задачи
+    """
+    logger.info(f"[processConversation] Получен запрос от {request.client_phone}")
+    background_tasks.add_task(process_conversation_background, request)
     return {"success": True}
 
 
-# LangChain version - Init conversation
-from src.schemas import InitConverastionRequest
-from src.utils.langchain_memory import SupabaseConversationMemory
-from agents.tools import get_client_profile, enhance_user_product_query
-from src.services.orders_service import OrderService
-
-
-async def init_conversation_v2_background(request: InitConverastionRequest):
+async def init_conversation_background(request: InitConverastionRequest):
+    """Инициализирует новую беседу с клиентом в фоновом режиме.
+    
+    Args:
+        request: Запрос с номером телефона клиента и темой беседы
+    """
+    logger.info(f"[initConversation] Начало обработки запроса для {request.client_phone}, topic: {request.topic}")
     langfuse = None
     trace = None
 
@@ -94,13 +129,13 @@ async def init_conversation_v2_background(request: InitConverastionRequest):
         try:
             langfuse = Langfuse()
             trace = langfuse.trace(
-                name="initConversation_v2",
+                name="initConversation",
                 user_id=request.client_phone,
                 input={
                     "client_phone": request.client_phone,
                     "topic": request.topic,
                 },
-                tags=["langchain", "agent", "v2", "init"],
+                tags=["langchain", "agent", "init"],
             )
         except Exception:
             langfuse = None
@@ -115,12 +150,6 @@ async def init_conversation_v2_background(request: InitConverastionRequest):
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
 
-        profile_text = ""
-        try:
-            profile_text = await get_client_profile.ainvoke({"phone": request.client_phone})
-        except Exception as e:
-            profile_text = "Профиль клиента не найден."
-
         products_text = ""
         try:
             seed_query = request.topic or "Ассортимент товаров"
@@ -131,63 +160,62 @@ async def init_conversation_v2_background(request: InitConverastionRequest):
                 raise ValueError("RAG empty")
         except Exception:
             try:
-                order_service = await OrderService()
-                random_products = await order_service.get_random_products(limit=10)
-                if random_products:
-                    lines = []
-                    for p in random_products[:10]:
-                        title = p.get("title", "")
-                        supplier = p.get("supplier_name", "")
-                        price = p.get("order_price_kg", "")
-                        lines.append(f"- {title} (поставщик: {supplier}, цена/кг: {price})")
-                    products_text = "Топ-товары:\n" + "\n".join(lines)
+                random_products_text = await get_random_products.ainvoke({"limit": 10})
+                if random_products_text and "не найдены" not in random_products_text.lower():
+                    products_text = random_products_text
                 else:
                     products_text = "Ассортимент будет обновлён позже."
             except Exception:
                 products_text = "Ассортимент будет обновлён позже."
 
         welcome_input = (
-            "Сформируй короткое приветствие для клиента, учитывая его профиль и ассортимент.\n"
+            "Сформируй короткое дружелюбное приветствие для клиента, учитывая его профиль и ассортимент.\n"
             f"Тема диалога: {request.topic}\n\n"
-            f"Профиль клиента:\n{profile_text}\n\n"
             f"Ассортимент/подборка:\n{products_text}\n\n"
-            "Поприветствуй дружелюбно, предложи помощь и ненавязчиво уточни запрос."
+            "Поприветствуй дружелюбно со смайликами, будь позитивным и энергичным. Предложи помощь и ненавязчиво уточни запрос."
         )
 
-        response_text = await agent.run(user_input=welcome_input, client_phone=request.client_phone)
+        response_text = await agent.run(
+            user_input=welcome_input, 
+            client_phone=request.client_phone,
+            topic=request.topic
+        )
+        
+        logger.info(f"[initConversation] Получен ответ от агента для {request.client_phone}, длина: {len(response_text)}")
 
         try:
             requests.post(
-                "http://51.250.42.45:2026/send-message",
+                settings.whatsapp.send_message_url,
                 json={
                     "recipient": request.client_phone,
                     "message": remove_markdown_symbols(response_text),
                 },
             )
-        except Exception:
-            pass
+            logger.info(f"[initConversation] Сообщение отправлено в WhatsApp для {request.client_phone}")
+        except Exception as e:
+            logger.warning(f"[initConversation] Ошибка отправки в WhatsApp: {e}")
 
         if trace is not None:
             try:
                 trace.update(
                     output={
                         "response": response_text,
-                        "profile": profile_text,
                         "products": products_text,
                     }
                 )
             except Exception:
                 pass
 
+        logger.info(f"[initConversation] Завершение обработки для {request.client_phone}")
         return {"success": True}
 
     except Exception as e:
         try:
             requests.post(
-                "http://51.250.42.45:2026/send-message",
+                settings.whatsapp.send_message_url,
                 json={
                     "recipient": request.client_phone,
-                    "message": "Что-то барахлит вотсап 😞. Пожалуйста, отправьте сообщение ещё раз",
+                    "message": "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
                 },
             )
         except Exception:
@@ -203,20 +231,24 @@ async def init_conversation_v2_background(request: InitConverastionRequest):
 
 
 @router.post("/initConversation", status_code=200)
-async def init_conversation_v2(request: InitConverastionRequest, background_tasks: BackgroundTasks):
-    background_tasks.add_task(init_conversation_v2_background, request)
+async def init_conversation(request: InitConverastionRequest, background_tasks: BackgroundTasks):
+    """Инициализирует новую беседу и запускает фоновую задачу.
+    
+    Args:
+        request: Запрос с номером телефона и темой беседы
+        background_tasks: Фоновые задачи FastAPI
+        
+    Returns:
+        Словарь с результатом успешного запуска задачи
+    """
+    logger.info(f"[initConversation] Получен запрос от {request.client_phone}, topic: {request.topic}")
+    background_tasks.add_task(init_conversation_background, request)
     return {"success": True}
 
 
-# LangChain version - Get profile
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
-from agents.tools import get_client_profile as lc_get_client_profile
-from src.services.history_service import HistoryService
-from src.services.orders_service import OrderService as OrdersService
-
-
 class ClientProfileResponse(BaseModel):
+    """Модель ответа с профилем клиента."""
+    
     client_phone: str
     profile: str
     message_count: int
@@ -225,30 +257,40 @@ class ClientProfileResponse(BaseModel):
 
 
 @router.get("/getProfile", response_model=ClientProfileResponse, status_code=200)
-async def get_profile_v2(client_phone: str):
+async def get_profile(client_phone: str):
+    """Получает профиль клиента по номеру телефона.
+    
+    Args:
+        client_phone: Номер телефона клиента
+        
+    Returns:
+        Модель с профилем клиента, количеством сообщений и последним заказом
+    """
+    client_phone = normalize_phone(client_phone)
+    
     try:
-        profile_text = await lc_get_client_profile.ainvoke({"phone": client_phone})
+        profile_text = await get_client_profile.ainvoke({"phone": client_phone})
     except Exception:
         profile_text = "Профиль клиента не найден в базе данных."
 
     message_count = 0
-    try:
-        history_service = await HistoryService()
-        history_resp = await history_service.get_history(client_phone=client_phone)
-        data = getattr(history_resp, "data", [])
-        message_count = len(data)
-    except Exception:
-        message_count = 0
-
     last_order: Optional[Dict[str, Any]] = None
+    supabase: AClient | None = None
+    
     try:
-        orders_service = await OrdersService()
-        orders = await orders_service.get_all_orders_by_client_phone(client_phone=client_phone)
+        supabase = await acreate_client(
+            settings.supabase.supabase_url,
+            settings.supabase.supabase_service_key,
+            options=AsyncClientOptions(schema="myaso")
+        )
+        
+        history_resp = await supabase.table('conversation_history').select('*').eq('client_phone', client_phone).execute()
+        message_count = len(history_resp.data) if history_resp.data else 0
+        
+        orders_resp = await supabase.table('orders').select('*').eq('client_phone', client_phone).order('created_at', desc=True).execute()
+        orders = orders_resp.data if orders_resp.data else []
         if orders:
-            def _created_at(o: Dict[str, Any]):
-                return o.get("created_at") or ""
-            orders_sorted = sorted(orders, key=_created_at, reverse=True)
-            o = orders_sorted[0]
+            o = orders[0]  # Уже отсортировано по дате
             last_order = {
                 "title": o.get("title"),
                 "created_at": o.get("created_at"),
@@ -257,7 +299,7 @@ async def get_profile_v2(client_phone: str):
                 "weight_kg": o.get("weight_kg"),
             }
     except Exception:
-        last_order = None
+        pass
 
     status = "active" if (message_count > 0 or last_order is not None) else "new"
 
@@ -268,3 +310,60 @@ async def get_profile_v2(client_phone: str):
         last_order=last_order,
         status=status,
     )
+
+
+async def reset_conversation_background(request: ResetConversationRequest):
+    """Сбрасывает историю беседы для клиента в фоновом режиме.
+    
+    Args:
+        request: Запрос с номером телефона клиента
+    """
+    langfuse = None
+    trace = None
+    
+    try:
+        try:
+            langfuse = Langfuse()
+            trace = langfuse.trace(
+                name="resetConversation",
+                user_id=request.client_phone,
+                input={"client_phone": request.client_phone},
+                tags=["langchain", "agent", "reset"],
+            )
+        except Exception:
+            langfuse = None
+            trace = None
+
+        memory = await SupabaseConversationMemory(request.client_phone)
+        await memory.clear()
+
+        if trace is not None:
+            try:
+                trace.update(output={"success": True})
+            except Exception:
+                pass
+
+        return {"success": True}
+
+    except Exception as e:
+        if trace is not None:
+            try:
+                trace.update(output={"error": str(e)})
+            except Exception:
+                pass
+        return {"success": False}
+
+
+@router.delete("/resetConversation", status_code=200)
+async def reset_conversation(request: ResetConversationRequest, background_tasks: BackgroundTasks):
+    """Сбрасывает историю беседы и запускает фоновую задачу.
+    
+    Args:
+        request: Запрос с номером телефона клиента
+        background_tasks: Фоновые задачи FastAPI
+        
+    Returns:
+        Словарь с результатом успешного запуска задачи
+    """
+    background_tasks.add_task(reset_conversation_background, request)
+    return {"success": True}

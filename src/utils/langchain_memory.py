@@ -1,9 +1,10 @@
-from __future__ import annotations
 """Короткая память диалога на Supabase для LangChain.
 
 Хранит историю в таблице `myaso.conversation_history` и возвращает
 сообщения в формате LangChain.
 """
+
+from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Sequence
 
@@ -31,6 +32,7 @@ _ROLE_TO_LC: Dict[str, type[BaseMessage]] = {
 
 
 def _to_role(message: BaseMessage) -> str:
+    """Преобразует LangChain сообщение в роль для БД."""
     if isinstance(message, HumanMessage):
         return "user"
     if isinstance(message, AIMessage):
@@ -43,6 +45,7 @@ def _to_role(message: BaseMessage) -> str:
 
 
 def _from_role(role: str, content: str) -> BaseMessage:
+    """Преобразует роль из БД в LangChain сообщение."""
     role = (role or "").lower()
     msg_cls = _ROLE_TO_LC.get(role, HumanMessage)
     if msg_cls is ToolMessage:
@@ -51,11 +54,7 @@ def _from_role(role: str, content: str) -> BaseMessage:
 
 
 class SupabaseConversationMemory(AsyncMixin, BaseChatMessageHistory):
-    """Память диалога на Supabase.
-
-    Таблица: `myaso.conversation_history` (client_phone, role, message, created_at).
-    Не изменяет существующие сервисы истории.
-    """
+    """Память диалога на Supabase."""
 
     def __init__(self, client_phone: str) -> None:
         super().__init__()
@@ -84,7 +83,6 @@ class SupabaseConversationMemory(AsyncMixin, BaseChatMessageHistory):
                     "message": m.content,
                 }
             )
-        # Insert in a single batch
         await self.supabase.table("conversation_history").insert(rows).execute()
 
     async def clear(self) -> None:

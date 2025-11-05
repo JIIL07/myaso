@@ -2,12 +2,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
 import os
 
-# Load .env file explicitly
 load_dotenv()
 
 
 class LangChainSettings(BaseSettings):
-    temperature: float = 0.7
+    temperature: float = 0.8
     max_tokens: int = 2048
     model_name: str = "gpt-4o-mini"
     langsmith_api_key: str = ""
@@ -19,15 +18,24 @@ class LangChainSettings(BaseSettings):
     )
 
     def setup_langsmith_tracing(self) -> None:
-        """Настраивает переменные окружения для LangSmith трейсинга."""
-        if self.langsmith_tracing_enabled and self.langsmith_api_key:
-            os.environ["LANGCHAIN_TRACING_V2"] = "true"
-            os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-            os.environ["LANGCHAIN_API_KEY"] = self.langsmith_api_key
-            os.environ["LANGCHAIN_PROJECT"] = self.langsmith_project_name
-        else:
-            # Отключаем трейсинг, если не настроен
+        """Настраивает переменные окружения для LangSmith трейсинга.
+        
+        Если langsmith_tracing_enabled=True и указан API ключ, устанавливает
+        переменные окружения для автоматического трейсинга всех LangChain операций.
+        Если трейсинг отключен, очищает переменные окружения.
+        """
+        if not self.langsmith_tracing_enabled:
             os.environ.pop("LANGCHAIN_TRACING_V2", None)
             os.environ.pop("LANGCHAIN_API_KEY", None)
             os.environ.pop("LANGCHAIN_PROJECT", None)
+            return
+        
+        if not self.langsmith_api_key:
+            #raise ValueError("LANGSMITH_API_KEY is required when langsmith_tracing_enabled=True")
+            return
+        
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
+        os.environ["LANGCHAIN_API_KEY"] = self.langsmith_api_key
+        os.environ["LANGCHAIN_PROJECT"] = self.langsmith_project_name
 

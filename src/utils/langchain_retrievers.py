@@ -1,29 +1,42 @@
 from __future__ import annotations
 
-from typing import Any, List, Sequence
+from typing import Any, List, Sequence, Dict
 import os
+import re
+import logging
+import asyncio
 
 import asyncpg
 from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
 
 from src.config.settings import settings
 from openai import OpenAI
 
+logger = logging.getLogger(__name__)
 
-class SupabaseVectorRetriever:
-    """Ретривер для семантического поиска по товарам (pgvector)."""
+
+class SupabaseVectorRetriever(BaseRetriever):
+    """Ретривер для семантического поиска по товарам (pgvector).
+    
+    Наследуется от BaseRetriever для лучшей интеграции с LangChain экосистемой.
+    """
 
     def __init__(
         self,
         *,
         embedding_model: str | None = None,
         db_dsn: str | None = None,
+        k: int = 10,
     ) -> None:
         """Инициализация ретривера.
 
-        - embedding_model: модель эмбеддингов
-        - db_dsn: DSN Postgres
+        Args:
+            embedding_model: модель эмбеддингов
+            db_dsn: DSN Postgres
+            k: Количество документов для возврата (по умолчанию 10)
         """
+        super().__init__()
         self._embedder = OpenAI(
             api_key=settings.alibaba.alibaba_key,
             base_url=settings.alibaba.base_alibaba_url,
@@ -31,11 +44,37 @@ class SupabaseVectorRetriever:
         self._embedding_model = (
             embedding_model or settings.alibaba.embedding_model_id or "text-embedding-v4"
         )
+        self._k = k
 
         self._db_dsn = db_dsn or os.getenv("POSTGRES_DSN")
+        
+        is_local_dev = os.getenv("ENVIRONMENT", "").lower() == "local" or os.getenv("ENV", "").lower() == "local"
+        
+        if self._db_dsn and is_local_dev:
+            is_docker = os.path.exists("/.dockerenv")
+            
+            if is_docker:
+                if "localhost" in self._db_dsn:
+                    self._db_dsn = self._db_dsn.replace("localhost", "host.docker.internal")
+                elif "192.168.65." in self._db_dsn:
+                    self._db_dsn = re.sub(r'@192\.168\.65\.\d+:', r'@host.docker.internal:', self._db_dsn)
 
     async def _embed(self, text: str) -> List[float]:
-        """Создаёт эмбеддинг текста (список float)."""
+        """Создаёт эмбеддинг текста используя Alibaba DashScope API.
+        
+        Отправляет текст в модель embeddings и возвращает векторное представление
+        в виде списка чисел с плавающей точкой.
+        
+        Args:
+            text: Текст для создания embedding
+            
+        Returns:
+            Список float чисел, представляющий векторное представление текста.
+            Размерность вектора зависит от модели (для text-embedding-v4 это обычно 1536).
+            
+        Raises:
+            Exception: Если произошла ошибка при обращении к API embeddings
+        """
         completion = self._embedder.embeddings.create(
             model=self._embedding_model,
             input=text,
@@ -43,18 +82,62 @@ class SupabaseVectorRetriever:
         data = completion.model_dump()
         return data["data"][0]["embedding"]
 
-    async def get_relevant_documents(self, query: str, k: int = 10) -> List[Document]:
-        """Возвращает top-k документов по близости (LangChain Document)."""
+    def _get_relevant_documents(self, query: str, *, run_manager: Any = None) -> List[Document]:
+        """Синхронная версия get_relevant_documents (требуется BaseRetriever).
+        
+        ВНИМАНИЕ: Эта версия не поддерживается, так как используется asyncpg.
+        Используйте aget_relevant_documents() вместо этого.
+        """
+        raise NotImplementedError(
+            "SupabaseVectorRetriever требует асинхронных операций. "
+            "Используйте aget_relevant_documents() вместо get_relevant_documents()"
+        )
+
+    async def _aget_relevant_documents(self, query: str, *, run_manager: Any = None) -> List[Document]:
+        """Асинхронная версия get_relevant_documents (требуется BaseRetriever).
+        
+        Args:
+            query: Текстовый запрос для поиска
+            run_manager: Менеджер выполнения (опционально)
+            
+        Returns:
+            Список Document объектов с найденными товарами
+        """
+        return await self._get_relevant_documents_impl(query, k=self._k)
+
+    async def get_relevant_documents(self, query: str, k: int | None = None) -> List[Document]:
+        """Возвращает top-k документов по близости (LangChain Document).
+        
+        Args:
+            query: Текстовый запрос для поиска
+            k: Количество документов для возврата (если None, используется значение из __init__)
+            
+        Returns:
+            Список Document объектов с найденными товарами
+        """
+        if k is None:
+            k = self._k
+        return await self._get_relevant_documents_impl(query, k=k)
+
+    async def _get_relevant_documents_impl(self, query: str, k: int) -> List[Document]:
+        """Внутренняя реализация получения документов."""
         vector = await self._embed(query)
 
         if not self._db_dsn:
             raise RuntimeError(
                 "POSTGRES_DSN is not set. Provide db_dsn at construction or set POSTGRES_DSN in .env"
             )
-
+        
         conn: asyncpg.Connection | None = None
         try:
-            conn = await asyncpg.connect(dsn=self._db_dsn)
+            conn = await asyncpg.connect(
+                dsn=self._db_dsn, 
+                timeout=10.0,
+                command_timeout=30.0,
+            )
+            
+            vector_str = '[' + ','.join(map(str, vector)) + ']'
+            
             rows: Sequence[asyncpg.Record] = await conn.fetch(
                 """
                 SELECT 
@@ -72,20 +155,28 @@ class SupabaseVectorRetriever:
                   package_type,
                   cooled_or_frozen,
                   product_in_package,
-                  embedding <-> $1::vector AS distance
+                  embedding <-> ($1::text::vector) AS distance
                 FROM myaso.products
-                ORDER BY embedding <-> $1::vector
+                WHERE embedding IS NOT NULL
+                ORDER BY embedding <-> ($1::text::vector)
                 LIMIT $2
                 """,
-                vector,
+                vector_str,
                 k,
             )
+        except Exception as e:
+            error_type = type(e).__name__
+            error_str = str(e)
+            
+            logger.error(f"Database connection error: {error_type}: {error_str}", exc_info=True)
+            
+            raise RuntimeError("Ошибка подключения к базе данных") from e
         finally:
             if conn is not None:
                 await conn.close()
 
         documents: List[Document] = []
-        for row in rows:
+        for i, row in enumerate(rows):
             row_dict: dict[str, Any] = dict(row)
             content_parts = [
                 f"Title: {row_dict.get('title', '')}",
@@ -106,3 +197,128 @@ class SupabaseVectorRetriever:
             )
 
         return documents
+
+    def _build_product_text(self, product: Dict[str, Any]) -> str:
+        """Создает текстовое описание товара для embedding.
+        
+        Args:
+            product: Словарь с данными товара из БД
+            
+        Returns:
+            Текст для создания embedding
+        """
+        parts = []
+        
+        if product.get('title'):
+            parts.append(product['title'])
+        
+        if product.get('supplier_name'):
+            parts.append(f"поставщик: {product['supplier_name']}")
+        
+        if product.get('from_region'):
+            parts.append(f"регион: {product['from_region']}")
+        
+        if product.get('cooled_or_frozen'):
+            parts.append(product['cooled_or_frozen'])
+        
+        if product.get('ready_made'):
+            parts.append("полуфабрикат")
+        
+        if product.get('package_type'):
+            parts.append(f"упаковка: {product['package_type']}")
+        
+        return " ".join(parts)
+
+    async def _embed_products(self, delay: float = 0.1) -> Dict[str, int]:
+        """Создает embedding для всех товаров без embedding в базе данных.
+        
+        Args:
+            delay: Задержка между запросами к API embedding в секундах (по умолчанию 0.1)
+            
+        Returns:
+            Словарь с результатами: {"processed": int, "errors": int, "total": int}
+        """
+        if not self._db_dsn:
+            raise RuntimeError(
+                "POSTGRES_DSN is not set. Provide db_dsn at construction or set POSTGRES_DSN in .env"
+            )
+        
+        conn: asyncpg.Connection | None = None
+        try:
+            conn = await asyncpg.connect(
+                dsn=self._db_dsn,
+                timeout=30.0,
+                command_timeout=300.0,
+            )
+            
+            products = await conn.fetch(
+                """
+                SELECT 
+                    id,
+                    title,
+                    supplier_name,
+                    from_region,
+                    cooled_or_frozen,
+                    ready_made,
+                    package_type
+                FROM myaso.products
+                WHERE embedding IS NULL
+                ORDER BY id
+                """
+            )
+            
+            total = len(products)
+            if total == 0:
+                logger.info("Все товары уже имеют embedding")
+                return {"processed": 0, "errors": 0, "total": 0}
+            
+            logger.info(f"Найдено {total} товаров без embedding. Начинаем обработку...")
+            
+            processed = 0
+            errors = 0
+            
+            for product in products:
+                try:
+                    product_dict = dict(product)
+                    product_text = self._build_product_text(product_dict)
+                    
+                    if not product_text.strip():
+                        logger.warning(f"Пропущен товар ID={product_dict['id']}: нет текста для embedding")
+                        continue
+                    
+                    embedding = await self._embed(product_text)
+                    
+                    vector_str = '[' + ','.join(map(str, embedding)) + ']'
+                    
+                    await conn.execute(
+                        """
+                        UPDATE myaso.products
+                        SET embedding = $1::vector
+                        WHERE id = $2
+                        """,
+                        vector_str,
+                        product_dict['id'],
+                    )
+                    
+                    processed += 1
+                    
+                    if processed % 10 == 0:
+                        logger.info(f"Обработано: {processed}/{total}")
+                    
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                
+                except Exception as e:
+                    errors += 1
+                    logger.error(f"Ошибка при обработке товара ID={product_dict.get('id', 'N/A')}: {e}")
+                    continue
+            
+            logger.info(f"Готово! Обработано: {processed}, Ошибок: {errors}, Всего: {total}")
+            return {"processed": processed, "errors": errors, "total": total}
+        
+        except Exception as e:
+            logger.error(f"Критическая ошибка при создании embeddings: {e}", exc_info=True)
+            raise
+        finally:
+            if conn is not None:
+                await conn.close()
