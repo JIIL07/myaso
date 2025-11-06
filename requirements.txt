@@ -28,11 +28,11 @@ itsdangerous==2.2.0
 Jinja2==3.1.6
 jiter==0.10.0
 langfuse==2.60.9
+langfuse-langchain>=2.0.0
 langchain==1.0.3
 langchain-classic==1.0.0
 langchain-community==0.4.1
 langchain-openai==1.0.1
-langsmith==0.4.40
 markdown-it-py==4.0.0
 MarkupSafe==3.0.2
 mdurl==0.1.2
@@ -53,6 +53,7 @@ Pygments==2.19.2
 PyJWT==2.10.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.1
+python-json-logger==3.2.1
 python-multipart==0.0.20
 pytokens==0.2.0
 PyYAML==6.0.2

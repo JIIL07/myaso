@@ -15,12 +15,12 @@ def _freeze_value(value: Any) -> Any:
 
     Рекурсивно преобразует словари, списки, кортежи и множества в кортежи
     для создания стабильного хэшируемого ключа кэша по конфигурации агента.
-    
+
     Используется для кэширования агентов с одинаковой конфигурацией.
-    
+
     Args:
         value: Произвольное значение (dict, list, tuple, set, или примитив)
-        
+
     Returns:
         Хэшируемое представление значения:
         - dict -> tuple(sorted items)
@@ -36,14 +36,14 @@ def _freeze_value(value: Any) -> Any:
 
 def _build_cache_key(name: str, config: Dict[str, Any]) -> Tuple[str, Any]:
     """Создаёт ключ кэша для агента.
-    
+
     Если в конфиге указан явный cache_key, использует его.
     Иначе создаёт ключ из имени агента и замороженного конфига.
-    
+
     Args:
         name: Имя агента (например, "product")
         config: Словарь конфигурации агента
-        
+
     Returns:
         Кортеж (name, cache_key) для использования в качестве ключа кэша
     """
@@ -89,7 +89,7 @@ class AgentFactory:
 
     def register_agent(self, name: str, agent_class: Type[BaseAgent]) -> None:
         """Регистрирует класс агента под указанным именем.
-        
+
         Args:
             name: Имя агента для регистрации
             agent_class: Класс агента, наследующийся от BaseAgent
@@ -100,14 +100,14 @@ class AgentFactory:
         """Возвращает (создаёт при необходимости) агента по имени и конфигу.
 
         Реализует singleton-per-config: один инстанс на уникальный ключ.
-        
+
         Args:
             name: Имя зарегистрированного агента
             config: Словарь конфигурации агента
-            
+
         Returns:
             Экземпляр агента
-            
+
         Raises:
             KeyError: Если агент с таким именем не зарегистрирован
         """
@@ -128,13 +128,13 @@ class AgentFactory:
 
     def create_product_agent(self, config: Dict[str, Any]) -> ProductAgent:
         """Создаёт или возвращает `ProductAgent` с учётом единичности по конфигу.
-        
+
         Args:
             config: Словарь конфигурации для ProductAgent
-            
+
         Returns:
             Экземпляр ProductAgent
-            
+
         Raises:
             TypeError: Если зарегистрированный агент не является ProductAgent
         """

@@ -7,7 +7,6 @@ load_dotenv()
 
 class LangChainSettings(BaseSettings):
     temperature: float = 0.8
-    max_tokens: int = 2048
     model_name: str = "gpt-4o-mini"
     langsmith_api_key: str = ""
     langsmith_project_name: str = "myaso-agents"
@@ -19,7 +18,7 @@ class LangChainSettings(BaseSettings):
 
     def setup_langsmith_tracing(self) -> None:
         """Настраивает переменные окружения для LangSmith трейсинга.
-        
+
         Если langsmith_tracing_enabled=True и указан API ключ, устанавливает
         переменные окружения для автоматического трейсинга всех LangChain операций.
         Если трейсинг отключен, очищает переменные окружения.
@@ -29,13 +28,11 @@ class LangChainSettings(BaseSettings):
             os.environ.pop("LANGCHAIN_API_KEY", None)
             os.environ.pop("LANGCHAIN_PROJECT", None)
             return
-        
+
         if not self.langsmith_api_key:
-            #raise ValueError("LANGSMITH_API_KEY is required when langsmith_tracing_enabled=True")
             return
-        
+
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
         os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
         os.environ["LANGCHAIN_API_KEY"] = self.langsmith_api_key
         os.environ["LANGCHAIN_PROJECT"] = self.langsmith_project_name
-

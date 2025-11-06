@@ -43,5 +43,3 @@ class BaseAgent(ABC):
     @abstractmethod
     def _create_tools(self) -> List[Any]:
         """Создаёт и возвращает список инструментов, доступных агенту."""
-
-

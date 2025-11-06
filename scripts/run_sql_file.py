@@ -4,7 +4,7 @@
 
 Использование:
     python scripts/run_sql_file.py <путь_к_sql_файлу>
-    
+
 Или с кастомными параметрами:
     python scripts/run_sql_file.py <путь_к_sql_файлу> \\
         --host localhost \\
@@ -36,23 +36,23 @@ async def execute_sql_file(
 ):
     """Выполняет SQL файл в базе данных."""
     file_path_obj = Path(file_path)
-    
+
     if not file_path_obj.exists():
         print(f"Файл не найден: {file_path}")
         sys.exit(1)
-    
+
     print(f"Читаю файл: {file_path}")
-    sql_content = file_path_obj.read_text(encoding='utf-8')
-    
+    sql_content = file_path_obj.read_text(encoding="utf-8")
+
     commands = [
-        cmd.strip() 
-        for cmd in sql_content.split(';') 
-        if cmd.strip() and not cmd.strip().startswith('--')
+        cmd.strip()
+        for cmd in sql_content.split(";")
+        if cmd.strip() and not cmd.strip().startswith("--")
     ]
-    
+
     print(f"Найдено команд: {len(commands)}")
     print(f"Подключаюсь к БД: {host}:{port}/{database}")
-    
+
     try:
         conn = await asyncpg.connect(
             host=host,
@@ -61,20 +61,20 @@ async def execute_sql_file(
             user=user,
             password=password,
         )
-        
+
         print("Подключение успешно")
-        
+
         success_count = 0
         error_count = 0
-        
+
         for i, command in enumerate(commands, 1):
             if not command:
                 continue
-                
+
             try:
                 if len(commands) > 10:
-                    print(f"Выполняю команду {i}/{len(commands)}...", end='\r')
-                
+                    print(f"Выполняю команду {i}/{len(commands)}...", end="\r")
+
                 await conn.execute(command)
                 success_count += 1
             except Exception as e:
@@ -86,19 +86,19 @@ async def execute_sql_file(
                     await conn.close()
                     print(f"\nОстановка выполнения из-за ошибки (команда {i})")
                     sys.exit(1)
-        
+
         if len(commands) > 10:
             print()
-        
+
         print(f"\nВыполнено успешно: {success_count}")
         if error_count > 0:
             print(f"Ошибок: {error_count}")
             await conn.close()
             sys.exit(1)
-        
+
         await conn.close()
         print("Готово!")
-        
+
     except asyncpg.exceptions.InvalidPasswordError:
         print("Неверный пароль")
         sys.exit(1)
@@ -115,49 +115,45 @@ def main():
     parser = argparse.ArgumentParser(
         description="Выполняет SQL файл в локальной базе данных Supabase"
     )
-    parser.add_argument(
-        "file",
-        type=str,
-        help="Путь к SQL файлу"
-    )
+    parser.add_argument("file", type=str, help="Путь к SQL файлу")
     parser.add_argument(
         "--host",
         type=str,
         default=os.getenv("POSTGRES_HOST", "localhost"),
-        help="Хост БД (по умолчанию: localhost)"
+        help="Хост БД (по умолчанию: localhost)",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=int(os.getenv("POSTGRES_PORT", "5432")),
-        help="Порт БД (по умолчанию: 5432 для локального Supabase)"
+        help="Порт БД (по умолчанию: 5432 для локального Supabase)",
     )
     parser.add_argument(
         "--database",
         type=str,
         default=os.getenv("POSTGRES_DB", "postgres"),
-        help="Имя базы данных (по умолчанию: postgres)"
+        help="Имя базы данных (по умолчанию: postgres)",
     )
     parser.add_argument(
         "--user",
         type=str,
         default=os.getenv("POSTGRES_USER", "postgres"),
-        help="Пользователь БД (по умолчанию: postgres)"
+        help="Пользователь БД (по умолчанию: postgres)",
     )
     parser.add_argument(
         "--password",
         type=str,
         default=os.getenv("POSTGRES_PASSWORD", "postgres"),
-        help="Пароль БД (по умолчанию: postgres)"
+        help="Пароль БД (по умолчанию: postgres)",
     )
     parser.add_argument(
         "--stop-on-error",
         action="store_true",
-        help="Остановить выполнение при первой ошибке"
+        help="Остановить выполнение при первой ошибке",
     )
-    
+
     args = parser.parse_args()
-    
+
     asyncio.run(
         execute_sql_file(
             file_path=args.file,
@@ -173,4 +169,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

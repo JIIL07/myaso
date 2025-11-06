@@ -99,8 +99,7 @@ class SupabaseConversationMemory(AsyncMixin, BaseChatMessageHistory):
         """Возвращает сообщения в формате LangChain (по возрастанию времени)."""
         assert self.supabase is not None, "Supabase client is not initialized"
         resp = (
-            await self.supabase
-            .table("conversation_history")
+            await self.supabase.table("conversation_history")
             .select("*")
             .eq("client_phone", self.client_phone)
             .order("created_at", desc=False)
@@ -109,7 +108,9 @@ class SupabaseConversationMemory(AsyncMixin, BaseChatMessageHistory):
         data: Iterable[Dict[str, Any]] = getattr(resp, "data", [])
         return [_from_role(r.get("role", "user"), r.get("message", "")) for r in data]
 
-    async def load_memory_variables(self, inputs: Dict[str, Any] | None = None, *, return_messages: bool = True) -> Dict[str, Any]:
+    async def load_memory_variables(
+        self, inputs: Dict[str, Any] | None = None, *, return_messages: bool = True
+    ) -> Dict[str, Any]:
         """Совместимость с ConversationBufferMemory.
 
         - Если `return_messages=True` — вернёт список `BaseMessage` в ключе `history`.
