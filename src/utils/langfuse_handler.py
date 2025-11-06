@@ -1,5 +1,5 @@
 """
-LangfuseHandler - упрощенный callback handler для Langfuse.
+LangfuseHandler - callback handler для Langfuse.
 
 Отслеживает вызовы инструментов и обновляет метаданные трейсов.
 """
@@ -16,18 +16,17 @@ logger = logging.getLogger(__name__)
 
 class LangfuseHandler(BaseCallbackHandler):
     """
-    Упрощенный LangFuse callback handler для отслеживания агентов.
+    LangFuse callback handler для отслеживания агентов.
 
     Отслеживает:
     - Вызовы инструментов
-    - Метаданные трейсов (tools_used)
+    - Метаданные трейсов (tools_used, user_id, session_id)
     """
 
     TOOL_TYPE_MAP = {
-        "enhance_user_product_query": "[VECTOR SEARCH]",
-        "text_to_sql_products": "[TEXT-TO-SQL]",
+        "vector_search": "[VECTOR SEARCH]",
         "generate_sql_from_text": "[SQL GENERATOR]",
-        "execute_sql_conditions": "[SQL EXECUTOR]",
+        "execute_sql_request": "[SQL EXECUTOR]",
         "show_product_photos": "[PHOTO SENDER]",
         "get_client_profile": "[CLIENT PROFILE]",
         "get_client_orders": "[CLIENT ORDERS]",
@@ -53,12 +52,7 @@ class LangfuseHandler(BaseCallbackHandler):
 
         self.client_phone = client_phone
         self.trace_name = trace_name or "AgentExecutor"
-
-        logger.info(
-            f"[LangfuseHandler.__init__] Инициализация для {client_phone}, "
-            f"langfuse_enabled={settings.langfuse.langfuse_enabled}, "
-            f"has_public_key={bool(settings.langfuse.langfuse_public_key)}"
-        )
+        self.session_id = session_id or f"{client_phone}_{datetime.now().date()}"
 
         self._langfuse_handler: Optional[LangfuseCallbackHandler] = None
         if settings.langfuse.langfuse_enabled and settings.langfuse.langfuse_public_key:
@@ -68,23 +62,17 @@ class LangfuseHandler(BaseCallbackHandler):
                     secret_key=settings.langfuse.langfuse_secret_key,
                     host=settings.langfuse.langfuse_host,
                     user_id=client_phone,
+                    session_id=self.session_id,
                     **kwargs
                 )
-                logger.info(f"LangFuse CallbackHandler инициализирован для {client_phone}")
             except Exception as e:
                 logger.warning(f"Не удалось инициализировать LangFuse CallbackHandler: {e}", exc_info=True)
-        else:
-            logger.warning(f"Langfuse отключен или нет ключей для {client_phone}")
+
 
         self.used_tools: set = set()
         self.tool_calls: List[Dict[str, Any]] = []
         self._trace_id: Optional[str] = None
         self._run_manager: Optional[Any] = None
-
-        logger.info(
-            f"[LangfuseHandler.__init__] Завершена инициализация для {client_phone}, "
-            f"type={type(self).__name__}, has_langfuse={self._langfuse_handler is not None}"
-        )
 
     def _get_tool_type(self, tool_name: str) -> str:
         """Возвращает тип инструмента для логирования."""
@@ -111,21 +99,6 @@ class LangfuseHandler(BaseCallbackHandler):
     ) -> None:
         """Вызывается когда chain начинает выполнение."""
         try:
-            serialized_type = type(serialized).__name__
-            serialized_str = str(serialized)[:200] if serialized else "None"
-            chain_name = serialized.get('name', 'unknown') if isinstance(serialized, dict) else 'unknown'
-
-            logger.info(
-                f"[LangfuseHandler.on_chain_start] Chain '{chain_name}' начал выполнение для {self.client_phone}",
-                extra={
-                    "chain_name": chain_name,
-                    "client_phone": self.client_phone,
-                    "has_run_manager": 'run_manager' in kwargs,
-                    "serialized_type": serialized_type,
-                    "serialized_preview": serialized_str
-                }
-            )
-
             if self._is_root_chain(serialized):
                 serialized = self._modify_chain_name(serialized)
 
@@ -140,7 +113,6 @@ class LangfuseHandler(BaseCallbackHandler):
 
             if 'run_manager' in kwargs:
                 self._run_manager = kwargs['run_manager']
-                logger.debug(f"[LangfuseHandler] run_manager установлен для {self.client_phone}")
             self._update_trace_id(**kwargs)
 
         except Exception as e:
@@ -156,7 +128,6 @@ class LangfuseHandler(BaseCallbackHandler):
         """Изменяет имя chain на trace_name."""
         modified = dict(serialized)
         modified['name'] = self.trace_name
-        logger.debug(f"[LangfuseHandler] Изменено имя chain на '{self.trace_name}'")
         return modified
 
     def on_tool_start(
@@ -168,8 +139,6 @@ class LangfuseHandler(BaseCallbackHandler):
         """Вызывается когда инструмент начинает выполнение."""
         tool_name = serialized.get("name", "unknown_tool") if isinstance(serialized, dict) else "unknown_tool"
 
-        print(f"🔧 TOOL START: {tool_name}")
-
         if self._langfuse_handler:
             try:
                 self._langfuse_handler.on_tool_start(serialized, input_str, **kwargs)
@@ -179,38 +148,26 @@ class LangfuseHandler(BaseCallbackHandler):
                     exc_info=True
                 )
 
-        logger.info(
-            f"[LangfuseHandler.on_tool_start] ВЫЗВАН для tool='{tool_name}', client={self.client_phone}",
-            extra={
-                "tool_name": tool_name,
-                "client_phone": self.client_phone,
-                "serialized_type": type(serialized).__name__,
-                "has_run_manager": 'run_manager' in kwargs,
-                "trace_id": self._trace_id
-            }
-        )
-
         self.used_tools.add(tool_name)
         tool_type = self._get_tool_type(tool_name)
 
         self._update_trace_id(**kwargs)
 
+        params_preview = str(input_str)[:200] if input_str else "нет параметров"
+        trace_id_info = f" (trace_id: {self._trace_id})" if self._trace_id else ""
         logger.info(
-            f"[TOOL CALL] {tool_type} '{tool_name}' вызван для {self.client_phone}",
-            extra={
-                "tool_name": tool_name,
-                "tool_type": tool_type,
-                "client_phone": self.client_phone,
-                "trace_id": self._trace_id
-            }
+            f"TOOLS: {tool_type} '{tool_name}' вызван для {self.client_phone}{trace_id_info} с параметрами: {params_preview}"
         )
 
+        import time
         self.tool_calls.append({
             "tool_name": tool_name,
             "input": input_str,
             "start_time": datetime.now().isoformat(),
+            "start_timestamp": time.time(),
             "output": None,
-            "error": None
+            "error": None,
+            "duration": None
         })
 
     def on_tool_end(
@@ -225,8 +182,6 @@ class LangfuseHandler(BaseCallbackHandler):
         tool_call = self.tool_calls[-1]
         tool_name = tool_call["tool_name"]
 
-        print(f"✅ TOOL END: {tool_name}")
-
         if self._langfuse_handler:
             try:
                 self._langfuse_handler.on_tool_end(output, **kwargs)
@@ -236,18 +191,21 @@ class LangfuseHandler(BaseCallbackHandler):
                     exc_info=True
                 )
 
+        import time
         tool_call["output"] = output
         tool_call["end_time"] = datetime.now().isoformat()
 
+        if "start_timestamp" in tool_call:
+            duration = time.time() - tool_call["start_timestamp"]
+            tool_call["duration"] = round(duration, 3)
+
         tool_type = self._get_tool_type(tool_name)
+        output_preview = str(output)[:300] if output else "нет результата"
+        trace_id_info = f" (trace_id: {self._trace_id})" if self._trace_id else ""
         logger.info(
-            f"[TOOL END] {tool_type} '{tool_name}' завершен для {self.client_phone}",
-            extra={
-                "tool_name": tool_name,
-                "tool_type": tool_type,
-                "client_phone": self.client_phone,
-                "trace_id": self._trace_id
-            }
+            f"TOOLS: {tool_type} '{tool_name}' завершен для {self.client_phone}{trace_id_info}, "
+            f"длительность: {tool_call.get('duration', 'N/A')}s, "
+            f"результат: {output_preview}"
         )
 
     def on_tool_error(
@@ -262,8 +220,6 @@ class LangfuseHandler(BaseCallbackHandler):
         tool_call = self.tool_calls[-1]
         tool_name = tool_call["tool_name"]
 
-        print(f"❌ TOOL ERROR: {tool_name} - {error}")
-
         if self._langfuse_handler:
             try:
                 self._langfuse_handler.on_tool_error(error, **kwargs)
@@ -277,16 +233,8 @@ class LangfuseHandler(BaseCallbackHandler):
 
         tool_type = self._get_tool_type(tool_name)
         logger.error(
-            f"[TOOL ERROR] {tool_type} '{tool_name}' "
-            f"завершился с ошибкой для {self.client_phone}",
-            exc_info=True,
-            extra={
-                "tool_name": tool_name,
-                "tool_type": tool_type,
-                "error": str(error),
-                "client_phone": self.client_phone,
-                "trace_id": self._trace_id
-            }
+            f"ОШИБКА: {tool_type} '{tool_name}' завершился с ошибкой для {self.client_phone}: {str(error)}",
+            exc_info=True
         )
 
     def on_chain_end(
@@ -296,11 +244,6 @@ class LangfuseHandler(BaseCallbackHandler):
     ) -> None:
         """Вызывается когда chain завершает выполнение."""
         try:
-            self._log_used_tools()
-
-            if self.used_tools:
-                self._update_trace_metadata()
-
             if self._langfuse_handler:
                 try:
                     self._langfuse_handler.on_chain_end(outputs, **kwargs)
@@ -316,27 +259,6 @@ class LangfuseHandler(BaseCallbackHandler):
         except Exception as e:
             logger.warning(f"[LangfuseHandler] Ошибка в on_chain_end: {e}", exc_info=True)
 
-    def _log_used_tools(self) -> None:
-        """Логирует информацию об использованных инструментах."""
-        tools_list = sorted(list(self.used_tools))
-
-        if not tools_list:
-            logger.warning(
-                f"[LangfuseHandler] tools_used пустой для {self.client_phone}! "
-                f"tool_calls: {[tc.get('tool_name') for tc in self.tool_calls]}"
-            )
-            return
-
-        tools_summary = []
-        for tool_name in tools_list:
-            call_count = sum(1 for tc in self.tool_calls if tc.get("tool_name") == tool_name)
-            tool_type = self._get_tool_type(tool_name).replace("[", "").replace("]", "")
-            tools_summary.append(f"{tool_type} {tool_name}({call_count}x)")
-
-        logger.info(
-            f"Использовано инструментов для {self.client_phone}: {', '.join(tools_summary)}"
-        )
-
     def _update_trace_metadata(self) -> None:
         """Обновляет метаданные трейса со списком использованных инструментов."""
         tools_list = sorted(list(self.used_tools))
@@ -346,15 +268,27 @@ class LangfuseHandler(BaseCallbackHandler):
         if self._run_manager and hasattr(self._run_manager, 'get_parent_run'):
             try:
                 parent_run = self._run_manager.get_parent_run()
-                if parent_run and hasattr(parent_run, 'extra'):
-                    if parent_run.extra is None:
-                        parent_run.extra = {}
-                    parent_run.extra['tools_used'] = tools_list
-                    logger.debug(f"[LangfuseHandler] Обновлены метаданные через run_manager: {tools_list}")
-            except Exception as e:
-                logger.debug(f"[LangfuseHandler] Не удалось обновить через run_manager: {e}")
+                if parent_run:
+                    if hasattr(parent_run, 'extra'):
+                        if parent_run.extra is None:
+                            parent_run.extra = {}
+                        parent_run.extra['tools_used'] = tools_list
+
+                    if hasattr(parent_run, 'metadata'):
+                        if parent_run.metadata is None:
+                            parent_run.metadata = {}
+                        parent_run.metadata['tools_used'] = tools_list
+            except Exception:
+                pass
 
     def save_conversation_to_langfuse(self) -> None:
-        """Сохраняет информацию о разговоре (для совместимости)."""
+        """Сохраняет информацию о разговоре в Langfuse."""
         if self.used_tools:
             self._update_trace_metadata()
+
+        if self._langfuse_handler:
+            try:
+                if hasattr(self._langfuse_handler, 'flush'):
+                    self._langfuse_handler.flush()
+            except Exception:
+                pass

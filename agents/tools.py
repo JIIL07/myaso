@@ -7,33 +7,31 @@ from __future__ import annotations
 
 from typing import List, Any, Optional
 import logging
-import os
 import httpx
-import asyncpg
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from supabase import (
     create_client,
     ClientOptions,
-    acreate_client,
-    AClient,
-    AsyncClientOptions,
 )
 
 from src.config.settings import settings
 from src.config.langchain_settings import LangChainSettings
+from src.config.database import get_pool
 from src.config.constants import (
     VECTOR_SEARCH_LIMIT,
     DEFAULT_SQL_LIMIT,
     TEXT_TO_SQL_TEMPERATURE,
     DANGEROUS_SQL_KEYWORDS,
-    FORBIDDEN_SQL_PATTERNS,
     HTTP_TIMEOUT_SECONDS,
+    MAX_SQL_RETRY_ATTEMPTS,
 )
 from src.utils.langchain_retrievers import SupabaseVectorRetriever
 from src.utils import records_to_json
 from src.utils.prompts import get_prompt
+from src.utils.sql_validator import validate_sql_conditions
+from src.utils.supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 langchain_settings = LangChainSettings()
@@ -46,7 +44,7 @@ supabase_client = create_client(
 
 
 @tool
-async def enhance_user_product_query(query: str) -> str:
+async def vector_search(query: str) -> str:
     """Ищет товары в базе данных по семантическому запросу пользователя.
 
     Использует векторный поиск (embeddings) для нахождения релевантных товаров.
@@ -62,12 +60,13 @@ async def enhance_user_product_query(query: str) -> str:
     - Пользователь спрашивает про товары от конкретного поставщика ("Что есть из продукции Мироторг", "товары от поставщика X", "что есть от Y")
     - Пользователь спрашивает про товары из конкретного региона ("мясо из региона Z", "товары из Сибири")
     - Запрос содержит название поставщика, региона или другие текстовые атрибуты товара
+    - Запрос НЕ содержит числовых условий (цена, вес, скидка с числами)
 
     НЕ используй если:
     - Запрос содержит только подтверждение/отказ ("Да", "Нет", "Ок")
     - Обсуждаются сервисные темы (доставка, оплата, расписание)
     - Пользователь уточняет детали уже известного товара
-    - Запрос содержит ТОЛЬКО числовые условия (цена меньше X, вес больше Y, скидка больше Z) - для этого используй text_to_sql_products
+    - Запрос содержит ЧИСЛОВЫЕ условия (цена меньше X, вес больше Y, скидка больше Z) - для этого используй generate_sql_from_text + execute_sql_request
 
     Args:
         query: Текстовый запрос пользователя о товарах/ассортименте
@@ -134,11 +133,7 @@ async def show_product_photos(product_titles: List[str], phone: str) -> str:
     no_photo = []
     not_found = []
 
-    supabase: AClient = await acreate_client(
-        settings.supabase.supabase_url,
-        settings.supabase.supabase_service_key,
-        options=AsyncClientOptions(schema="myaso"),
-    )
+    supabase = await get_supabase_client()
 
     for title in product_titles:
         try:
@@ -172,9 +167,6 @@ async def show_product_photos(product_titles: List[str], phone: str) -> str:
                             )
                             response.raise_for_status()
                         found_with_photo = True
-                        logger.info(
-                            f"[show_product_photos] Фото товара '{title}' отправлено для {phone}"
-                        )
                     except Exception as e:
                         logger.warning(
                             f"[show_product_photos] Ошибка отправки фото для {title}: {e}"
@@ -224,11 +216,7 @@ async def get_client_profile(phone: str) -> str:
     Returns:
         Строка с отформатированной информацией о профиле клиента или сообщение об отсутствии данных
     """
-    supabase: AClient = await acreate_client(
-        settings.supabase.supabase_url,
-        settings.supabase.supabase_service_key,
-        options=AsyncClientOptions(schema="myaso"),
-    )
+    supabase = await get_supabase_client()
 
     result = await supabase.table("clients").select("*").eq("phone", phone).execute()
     profile = result.data[0] if result.data and len(result.data) > 0 else None
@@ -274,11 +262,7 @@ async def get_client_orders(phone: str) -> str:
     Returns:
         Строка с отформатированным списком заказов или сообщение об отсутствии заказов
     """
-    supabase: AClient = await acreate_client(
-        settings.supabase.supabase_url,
-        settings.supabase.supabase_service_key,
-        options=AsyncClientOptions(schema="myaso"),
-    )
+    supabase = await get_supabase_client()
 
     result = (
         await supabase.table("orders")
@@ -312,161 +296,120 @@ async def get_client_orders(phone: str) -> str:
 async def get_random_products(limit: int = 10) -> str:
     """Получает случайные товары из ассортимента.
 
-    Используется как fallback когда поиск по запросу не дал результатов.
-    Возвращает случайный набор товаров из базы данных.
+    FALLBACK инструмент - используй когда другие поиски не дали результатов!
+
+    Используй этот инструмент когда:
+    - vector_search вернул "Товары по вашему запросу не найдены"
+    - execute_sql_request вернул "Товары по указанным условиям не найдены"
+    - Пользователь спрашивает "Что у вас есть?" и нужно показать любой ассортимент
+    - Нужно показать примеры товаров из ассортимента
+    - Все остальные инструменты поиска не дали результатов
+
+    НЕ используй если:
+    - vector_search или execute_sql_request уже нашли товары
+    - Есть конкретный запрос, который можно обработать другими инструментами
+
+    Это инструмент последней надежды - используй его только когда ничего не найдено!
 
     Args:
-        limit: Количество товаров для возврата (по умолчанию 10)
+        limit: Количество товаров для возврата (по умолчанию 10, максимум 20)
 
     Returns:
         Строка с отформатированным списком случайных товаров
     """
-    db_dsn = os.getenv("POSTGRES_DSN") or None
-    if not db_dsn:
-        return "Не настроено подключение к базе данных."
+    if limit > 20:
+        limit = 20
 
-    conn = None
     try:
-        conn = await asyncpg.connect(dsn=db_dsn)
-        result = await conn.fetch(
-            """
-            SELECT
-                id,
-                title,
-                supplier_name,
-                from_region,
-                photo,
-                order_price_kg,
-                min_order_weight_kg,
-                cooled_or_frozen,
-                ready_made,
-                package_type,
-                discount
-            FROM myaso.products
-            ORDER BY RANDOM()
-            LIMIT $1
-            """,
-            limit,
-        )
-        json_result = records_to_json(result)
-
-        if not json_result:
-            return "Товары не найдены."
-
-        products_list = []
-        for product in json_result:
-            product_info = [
-                f"Название: {product.get('title', 'Не указано')}",
-                f"Поставщик: {product.get('supplier_name', 'Не указано')}",
-                f"Регион: {product.get('from_region', 'Не указано')}",
-                f"Цена за кг: {product.get('order_price_kg', 'Не указано')}",
-                f"Минимальный заказ (кг): {product.get('min_order_weight_kg', 'Не указано')}",
-            ]
-            products_list.append(
-                "\n".join([info for info in product_info if "Не указано" not in info])
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.fetch(
+                """
+                SELECT
+                    id,
+                    title,
+                    supplier_name,
+                    from_region,
+                    photo,
+                    order_price_kg,
+                    min_order_weight_kg,
+                    cooled_or_frozen,
+                    ready_made,
+                    package_type,
+                    discount
+                FROM myaso.products
+                ORDER BY RANDOM()
+                LIMIT $1
+                """,
+                limit,
             )
+            json_result = records_to_json(result)
 
-        result_text = "\n\n---\n\n".join(products_list)
-        return f"Найдено товаров: {len(json_result)}\n\n{result_text}"
+            if not json_result:
+                return "Товары не найдены."
 
+            products_list = []
+            for product in json_result:
+                product_info = [
+                    f"Название: {product.get('title', 'Не указано')}",
+                    f"Поставщик: {product.get('supplier_name', 'Не указано')}",
+                    f"Регион: {product.get('from_region', 'Не указано')}",
+                    f"Цена за кг: {product.get('order_price_kg', 'Не указано')}",
+                    f"Минимальный заказ (кг): {product.get('min_order_weight_kg', 'Не указано')}",
+                ]
+                products_list.append(
+                    "\n".join([info for info in product_info if "Не указано" not in info])
+                )
+
+            result_text = "\n\n---\n\n".join(products_list)
+            return f"Найдено товаров: {len(json_result)}\n\n{result_text}"
+
+    except RuntimeError as e:
+        logger.error(f"Ошибка подключения к базе данных: {e}")
+        return "Не настроено подключение к базе данных."
     except Exception as e:
         logger.error(f"Ошибка при получении случайных товаров: {e}")
         return f"Ошибка при получении товаров: {str(e)}"
-    finally:
-        if conn:
-            await conn.close()
-
-
-@tool
-async def generate_sql_with_llm(system_prompt: str, text_conditions: str) -> str:
-    """Вызывает LLM для преобразования текстового описания в SQL WHERE условия.
-
-    Внутренний инструмент для генерации SQL через LLM. Принимает готовый system_prompt
-    с инструкциями и информацией о схеме БД, а также текстовое описание условий.
-
-    Args:
-        system_prompt: Системный промпт с инструкциями для LLM и информацией о схеме БД
-        text_conditions: Текстовое описание условий на русском языке
-
-    Returns:
-        SQL WHERE условия (без ключевого слова WHERE), готовые для использования в запросе
-    """
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", system_prompt), ("human", "{text_conditions}")]
-    )
-
-    langchain_settings.setup_langsmith_tracing()
-    text2sql_llm = ChatOpenAI(
-        model=settings.openrouter.model_id,
-        openai_api_key=settings.openrouter.openrouter_api_key,
-        openai_api_base=settings.openrouter.base_url,
-        temperature=TEXT_TO_SQL_TEMPERATURE,
-    )
-
-    chain = prompt | text2sql_llm
-    result = await chain.ainvoke({"text_conditions": text_conditions})
-
-    sql_conditions = result.content.strip()
-
-    if sql_conditions.startswith("```"):
-        lines = sql_conditions.split("\n")
-        sql_conditions = "\n".join(
-            [line for line in lines if not line.strip().startswith("```")]
-        )
-        sql_conditions = sql_conditions.strip()
-
-    logger.info(f"[generate_sql_with_llm] LLM вернул: {sql_conditions[:300]}")
-
-    if not sql_conditions or not sql_conditions.strip():
-        raise ValueError("LLM не вернул SQL условия")
-
-    sql_upper = sql_conditions.upper()
-    for keyword in DANGEROUS_SQL_KEYWORDS:
-        if keyword in sql_upper:
-            logger.error(
-                f"Обнаружена опасная SQL команда: {keyword} в запросе: {sql_conditions[:200]}"
-            )
-            raise ValueError(f"Обнаружена опасная SQL команда: {keyword}")
-
-    return sql_conditions
 
 
 @tool
 async def generate_sql_from_text(
     text_conditions: str,
-    previous_sql: Optional[str] = None,
-    error_message: Optional[str] = None,
-    attempt_number: int = 1,
     topic: Optional[str] = None,
 ) -> str:
     """Генерирует SQL WHERE условия из текстового описания используя LLM.
 
     Преобразует текстовое описание условий на русском языке в SQL WHERE условия.
+    Имеет встроенный retry механизм (3 попытки с exponential backoff).
 
-    Используй этот инструмент когда:
-    - Нужно преобразовать текстовое описание условий в SQL
-    - Пользователь описывает условия для поиска товаров на русском языке
-    - Требуется сгенерировать SQL запрос для фильтрации товаров
+    КРИТИЧЕСКИ ВАЖНО: Используй этот инструмент ПЕРВЫМ при наличии ЧИСЛОВЫХ условий в запросе!
+
+    ОБЯЗАТЕЛЬНО используй этот инструмент когда:
+    - Запрос содержит ЧИСЛОВЫЕ условия про ЦЕНУ ("цена меньше 80", "дешевле 100 рублей", "цена от 50 до 200", "стоимость меньше X")
+    - Запрос содержит ЧИСЛОВЫЕ условия про ВЕС ("вес больше 5 кг", "минимальный заказ меньше 10", "вес от X до Y")
+    - Запрос содержит ЧИСЛОВЫЕ условия про СКИДКУ ("скидка больше 15%", "скидка от 10 до 20", "скидка меньше X%")
+    - Запрос содержит КОМБИНАЦИЮ числовых условий ("цена меньше 100 и скидка больше 10%", "цена от 50 до 200 и вес меньше 10")
+    - Пользователь описывает условия с числами на русском языке ("дешевле 200 рублей", "скидка больше 15%", "цена меньше 80")
+
+    НЕ используй если:
+    - Запрос содержит ТОЛЬКО название поставщика БЕЗ чисел ("товары от Мироторг", "продукция X") - используй vector_search
+    - Запрос содержит ТОЛЬКО название региона БЕЗ чисел ("мясо из Сибири", "товары из региона Y") - используй vector_search
+    - Запрос содержит ТОЛЬКО текстовые критерии БЕЗ чисел ("говядина", "стейки", "полуфабрикаты") - используй vector_search
+
+    После использования этого инструмента, ОБЯЗАТЕЛЬНО используй execute_sql_request для выполнения запроса!
 
     Args:
-        text_conditions: Текстовое описание условий на русском языке (например, "товары с фотографией", "цена меньше 100 рублей")
-        previous_sql: Предыдущий SQL запрос (для retry, опционально)
-        error_message: Сообщение об ошибке (для retry, опционально)
-        attempt_number: Номер попытки (для retry, опционально)
+        text_conditions: Текстовое описание условий на русском языке (например, "цена меньше 100 рублей", "товары с фотографией и цена от 50 до 200")
         topic: Тема диалога для загрузки промпта из БД (опционально)
 
     Returns:
-        SQL WHERE условия (без ключевого слова WHERE), готовые для использования в запросе
+        SQL WHERE условия (без ключевого слова WHERE), готовые для использования в execute_sql_request
     """
     db_prompt = None
     if topic:
         db_prompt = await get_prompt(topic)
         if db_prompt:
-            logger.info(f"[generate_sql_from_text] Загружен промпт по topic '{topic}'")
-        else:
-            logger.warning(
-                f"[generate_sql_from_text] Промпт по topic '{topic}' не найден, используем дефолтный"
-            )
+            logger.info(f"ПРОМПТ: Загружен промпт по topic '{topic}' для generate_sql_from_text")
 
     if not db_prompt:
         db_prompt = await get_prompt("Получить товары при инициализации диалога")
@@ -512,36 +455,101 @@ async def generate_sql_from_text(
     НЕ указывай схему (myaso.) в условиях!
     НЕ используй ключевое слово WHERE в ответе - только условия!
     """
+    system_prompt = f"{db_prompt}\n\n{schema_info}"
 
-    if "{schema_info}" in db_prompt:
-        system_prompt = db_prompt.format(schema_info=schema_info)
-    else:
-        system_prompt = f"{db_prompt}\n\n{schema_info}"
 
-    if previous_sql and error_message:
-        human_message = f"""Предыдущий SQL запрос (попытка {attempt_number - 1}):
+    max_attempts = MAX_SQL_RETRY_ATTEMPTS
+    previous_sql = None
+    last_error = None
+
+    langchain_settings.setup_langsmith_tracing()
+    text2sql_llm = ChatOpenAI(
+        model=settings.openrouter.model_id,
+        openai_api_key=settings.openrouter.openrouter_api_key,
+        openai_api_base=settings.openrouter.base_url,
+        temperature=TEXT_TO_SQL_TEMPERATURE,
+    )
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if attempt > 1 and previous_sql and last_error:
+                human_message = f"""Предыдущий SQL запрос (попытка {attempt - 1}):
 {previous_sql}
 
 Ошибка выполнения:
-{error_message}
+{last_error}
 
-Попытка {attempt_number}. Исправь SQL запрос и верни только исправленные условия (без WHERE):
+Попытка {attempt}. Исправь SQL запрос и верни только исправленные условия (без WHERE):
 {text_conditions}"""
-    else:
-        human_message = text_conditions
+            else:
+                human_message = text_conditions
 
-    sql_conditions = await generate_sql_with_llm.ainvoke(
-        {"system_prompt": system_prompt, "text_conditions": human_message}
-    )
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", system_prompt), ("human", "{text_conditions}")]
+            )
+            chain = prompt | text2sql_llm
+            result = await chain.ainvoke({"text_conditions": human_message})
 
-    return sql_conditions
+            sql_conditions = result.content.strip()
+
+            if sql_conditions.startswith("```"):
+                lines = sql_conditions.split("\n")
+                sql_conditions = "\n".join(
+                    [line for line in lines if not line.strip().startswith("```")]
+                )
+                sql_conditions = sql_conditions.strip()
+
+            if not sql_conditions or not sql_conditions.strip():
+                raise ValueError("LLM вернул пустые SQL условия")
+
+            sql_upper = sql_conditions.upper()
+            for keyword in DANGEROUS_SQL_KEYWORDS:
+                if keyword in sql_upper:
+                    logger.error(
+                        f"Обнаружена опасная SQL команда: {keyword} в запросе: {sql_conditions[:200]}"
+                    )
+                    raise ValueError(f"Обнаружена опасная SQL команда: {keyword}")
+
+            return sql_conditions
+
+        except Exception as e:
+            last_error = str(e)
+            previous_sql = sql_conditions if 'sql_conditions' in locals() else None
+
+            logger.warning(
+                f"[generate_sql_from_text] Попытка {attempt}/{max_attempts} не удалась: {e}",
+                exc_info=attempt == max_attempts,
+            )
+
+            if attempt < max_attempts:
+                import asyncio
+                wait_time = 2 ** (attempt - 1)
+                await asyncio.sleep(wait_time)
+            else:
+                error_msg = (
+                    f"Не удалось сгенерировать SQL условия после {max_attempts} попыток. "
+                    f"Последняя ошибка: {last_error}"
+                )
+                logger.error(f"[generate_sql_from_text] {error_msg}")
+                raise ValueError(error_msg) from e
+
+    raise ValueError("Не удалось сгенерировать SQL условия")
 
 
 @tool
-async def execute_sql_conditions(
+async def execute_sql_request(
     sql_conditions: str, limit: int = DEFAULT_SQL_LIMIT
 ) -> str:
     """Выполняет SQL запрос с WHERE условиями и возвращает товары.
+
+    Используй этот инструмент когда:
+    - У тебя есть готовые SQL WHERE условия (сгенерированные через generate_sql_from_text)
+    - Нужно выполнить SQL запрос для поиска товаров по условиям
+    - После успешной генерации SQL условий нужно получить результаты
+
+    НЕ используй если:
+    - У тебя нет готовых SQL условий - сначала используй generate_sql_from_text
+    - Запрос не содержит числовых условий - используй vector_search
 
     Args:
         sql_conditions: SQL WHERE условия (без ключевого слова WHERE)
@@ -550,130 +558,66 @@ async def execute_sql_conditions(
     Returns:
         Строка с отформатированным списком найденных товаров
     """
-    sql_upper = sql_conditions.upper()
-    for keyword in DANGEROUS_SQL_KEYWORDS:
-        if keyword in sql_upper:
-            logger.error(
-                f"Обнаружена опасная SQL команда: {keyword} в запросе: {sql_conditions[:200]}"
-            )
-            raise ValueError(f"Обнаружена опасная SQL команда: {keyword}")
-
     sql_conditions = sql_conditions.strip()
-    if not sql_conditions:
-        raise ValueError("SQL условия не могут быть пустыми")
 
-    sql_lower = sql_conditions.lower()
-    for pattern in FORBIDDEN_SQL_PATTERNS:
-        if pattern.lower() in sql_lower:
-            logger.error(
-                f"Обнаружен запрещенный паттерн '{pattern}' в SQL: {sql_conditions[:200]}"
-            )
-            raise ValueError(f"Запрещенный паттерн в SQL условиях: {pattern}")
-
-    db_dsn = os.getenv("POSTGRES_DSN") or None
-    if not db_dsn:
-        logger.error("POSTGRES_DSN не настроен")
-        return "Не настроено подключение к базе данных."
-
-    conn = None
     try:
-        conn = await asyncpg.connect(dsn=db_dsn)
-
-        query = f"""
-            SELECT
-                id,
-                title,
-                supplier_name,
-                from_region,
-                photo,
-                order_price_kg,
-                min_order_weight_kg,
-                cooled_or_frozen,
-                ready_made,
-                package_type,
-                discount
-            FROM myaso.products
-            WHERE {sql_conditions}
-            LIMIT $1
-        """
-        result = await conn.fetch(query, limit)
-        json_result = records_to_json(result)
-
-        if not json_result:
-            return "Товары по указанным условиям не найдены."
-
-        products_list = []
-        for product in json_result:
-            product_info = [
-                f"Название: {product.get('title', 'Не указано')}",
-                f"Поставщик: {product.get('supplier_name', 'Не указано')}",
-                f"Регион: {product.get('from_region', 'Не указано')}",
-                f"Цена за кг: {product.get('order_price_kg', 'Не указано')}",
-                f"Минимальный заказ (кг): {product.get('min_order_weight_kg', 'Не указано')}",
-                f"Охлаждённый/Замороженный: {product.get('cooled_or_frozen', 'Не указано')}",
-                f"Полуфабрикат: {'Да' if product.get('ready_made') else 'Нет'}",
-                f"Тип упаковки: {product.get('package_type', 'Не указано')}",
-                f"Скидка: {product.get('discount', 'Не указано')}",
-            ]
-            products_list.append(
-                "\n".join([info for info in product_info if "Не указано" not in info])
-            )
-
-        result_text = "\n\n---\n\n".join(products_list)
-        return f"Найдено товаров: {len(json_result)}\n\n{result_text}"
-
-    except Exception as e:
-        logger.error(f"Ошибка при получении товаров по SQL условиям: {e}")
-        logger.error(f"SQL условия, которые вызвали ошибку: {sql_conditions[:200]}")
-        raise
-    finally:
-        if conn:
-            await conn.close()
-
-
-@tool
-async def text_to_sql_products(
-    text_conditions: str, limit: int = DEFAULT_SQL_LIMIT, topic: Optional[str] = None
-) -> str:
-    """Ищет товары по текстовому описанию условий используя text-to-SQL.
-
-    Преобразует текстовое описание условий в SQL запрос и возвращает найденные товары.
-
-    КРИТИЧЕСКИ ВАЖНО: Используй этот инструмент ПЕРВЫМ при наличии ЧИСЛОВЫХ условий в запросе!
-
-    ОБЯЗАТЕЛЬНО используй этот инструмент когда:
-    - Запрос содержит ЧИСЛОВЫЕ условия про ЦЕНУ ("цена меньше 80", "дешевле 100 рублей", "цена от 50 до 200", "стоимость меньше X", "цена больше Y")
-    - Запрос содержит ЧИСЛОВЫЕ условия про ВЕС ("вес больше 5 кг", "минимальный заказ меньше 10", "вес от X до Y")
-    - Запрос содержит ЧИСЛОВЫЕ условия про СКИДКУ ("скидка больше 15%", "скидка от 10 до 20", "скидка меньше X%")
-    - Запрос содержит КОМБИНАЦИЮ числовых условий ("цена меньше 100 и скидка больше 10%", "цена от 50 до 200 и вес меньше 10")
-    - Пользователь описывает условия с числами на русском языке ("дешевле 200 рублей", "скидка больше 15%", "цена меньше 80")
-
-    НЕ используй если:
-    - Запрос содержит ТОЛЬКО название поставщика БЕЗ чисел ("товары от Мироторг", "продукция X") - используй enhance_user_product_query
-    - Запрос содержит ТОЛЬКО название региона БЕЗ чисел ("мясо из Сибири", "товары из региона Y") - используй enhance_user_product_query
-    - Запрос содержит ТОЛЬКО текстовые критерии БЕЗ чисел ("говядина", "стейки", "полуфабрикаты") - используй enhance_user_product_query
-
-    Args:
-        text_conditions: Текстовое описание условий на русском языке (например, "цена меньше 100 рублей", "товары с фотографией и цена от 50 до 200")
-        limit: Максимальное количество товаров для возврата
-        topic: Тема диалога для загрузки промпта из БД (опционально)
-
-    Returns:
-        Строка с отформатированным списком найденных товаров
-    """
-    try:
-        invoke_params = {"text_conditions": text_conditions}
-        if topic:
-            invoke_params["topic"] = topic
-
-        sql_conditions = await generate_sql_from_text.ainvoke(invoke_params)
-        products_text = await execute_sql_conditions.ainvoke(
-            {"sql_conditions": sql_conditions, "limit": limit}
-        )
-        return products_text
+        validate_sql_conditions(sql_conditions)
     except ValueError as e:
-        logger.error(f"Ошибка валидации в text_to_sql_products: {e}", exc_info=True)
-        return f"Ошибка при поиске товаров: {str(e)}"
+        logger.error(f"SQL условия не прошли валидацию: {e}. Условия: {sql_conditions[:200]}")
+        raise
+
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            query = f"""
+                SELECT
+                    id,
+                    title,
+                    supplier_name,
+                    from_region,
+                    photo,
+                    order_price_kg,
+                    min_order_weight_kg,
+                    cooled_or_frozen,
+                    ready_made,
+                    package_type,
+                    discount
+                FROM myaso.products
+                WHERE {sql_conditions}
+                LIMIT $1
+            """
+            result = await conn.fetch(query, limit)
+            json_result = records_to_json(result)
+
+            if not json_result:
+                return "Товары по указанным условиям не найдены."
+
+            products_list = []
+            for product in json_result:
+                product_info = [
+                    f"Название: {product.get('title', 'Не указано')}",
+                    f"Поставщик: {product.get('supplier_name', 'Не указано')}",
+                    f"Регион: {product.get('from_region', 'Не указано')}",
+                    f"Цена за кг: {product.get('order_price_kg', 'Не указано')}",
+                    f"Минимальный заказ (кг): {product.get('min_order_weight_kg', 'Не указано')}",
+                    f"Охлаждённый/Замороженный: {product.get('cooled_or_frozen', 'Не указано')}",
+                    f"Полуфабрикат: {'Да' if product.get('ready_made') else 'Нет'}",
+                    f"Тип упаковки: {product.get('package_type', 'Не указано')}",
+                    f"Скидка: {product.get('discount', 'Не указано')}",
+                ]
+                products_list.append(
+                    "\n".join([info for info in product_info if "Не указано" not in info])
+                )
+
+            result_text = "\n\n---\n\n".join(products_list)
+            return f"Найдено товаров: {len(json_result)}\n\n{result_text}"
+
+    except RuntimeError as e:
+        logger.error(f"Ошибка подключения к базе данных: {e}")
+        return "Не настроено подключение к базе данных."
     except Exception as e:
-        logger.error(f"Ошибка в text_to_sql_products: {e}", exc_info=True)
-        return f"Ошибка при поиске товаров: {str(e)}"
+        logger.error(f"Ошибка при получении товаров по SQL условиям: {e}", exc_info=True)
+        logger.error(f"SQL условия, которые вызвали ошибку: {sql_conditions[:200]}")
+        return "Товары по указанным условиям не найдены."
+
+

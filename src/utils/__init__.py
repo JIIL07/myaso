@@ -1,6 +1,6 @@
 """Utils package for myaso project."""
 
-from .common import (
+from .async_mixin import (
     AsyncMixin,
     remove_markdown_symbols,
     records_to_json,

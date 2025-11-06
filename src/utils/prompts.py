@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import Optional, Dict, Any
 import logging
-from supabase import acreate_client, AClient, AsyncClientOptions
 
-from src.config.settings import settings
+from src.utils.supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +20,7 @@ async def get_prompt(topic: str) -> Optional[str]:
         Текст промпта из колонки prompt или None, если промпт не найден
     """
     try:
-        supabase: AClient = await acreate_client(
-            settings.supabase.supabase_url,
-            settings.supabase.supabase_service_key,
-            options=AsyncClientOptions(schema="myaso"),
-        )
+        supabase = await get_supabase_client()
 
         result = (
             await supabase.table("prompts")
@@ -54,11 +49,7 @@ async def get_system_value(topic: str) -> Optional[str]:
         Значение параметра или None, если параметр не найден
     """
     try:
-        supabase: AClient = await acreate_client(
-            settings.supabase.supabase_url,
-            settings.supabase.supabase_service_key,
-            options=AsyncClientOptions(schema="myaso"),
-        )
+        supabase = await get_supabase_client()
 
         result = (
             await supabase.table("system").select("value").eq("topic", topic).execute()
@@ -84,11 +75,7 @@ async def get_all_system_values() -> Dict[str, str]:
         Если записей нет или произошла ошибка, возвращает пустой словарь {}.
     """
     try:
-        supabase: AClient = await acreate_client(
-            settings.supabase.supabase_url,
-            settings.supabase.supabase_service_key,
-            options=AsyncClientOptions(schema="myaso"),
-        )
+        supabase = await get_supabase_client()
 
         result = await supabase.table("system").select("topic, value").execute()
 
