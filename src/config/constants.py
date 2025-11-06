@@ -46,3 +46,38 @@ FORBIDDEN_SQL_PATTERNS = [
     "CAST(",
     "CONVERT(",
 ]
+
+ALLOWED_SQL_COLUMNS = {
+    "id",
+    "title",
+    "supplier_name",
+    "from_region",
+    "photo",
+    "pricelist_date",
+    "package_weight",
+    "order_price_kg",
+    "min_order_weight_kg",
+    "discount",
+    "ready_made",
+    "package_type",
+    "cooled_or_frozen",
+    "product_in_package",
+}
+
+ALLOWED_SQL_OPERATORS = {
+    "=", "!=", "<>", "<", ">", "<=", ">=",
+    "AND", "OR", "NOT",
+    "IS NULL", "IS NOT NULL",
+    "ILIKE", "LIKE",
+    "IN", "NOT IN",
+    "BETWEEN", "NOT BETWEEN",
+}
+
+ALLOWED_SQL_FUNCTIONS = {
+    "CURRENT_DATE",
+    "CURRENT_TIMESTAMP",
+    "NOW()",
+    "LOWER",
+    "UPPER",
+    "TRIM",
+}

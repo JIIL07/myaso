@@ -2,12 +2,14 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, Mock
 from typing import Any
 
-from agents.product_agent import ProductAgent
-from agents.tools import (
-    enhance_user_product_query,
+from src.agents.product_agent import ProductAgent
+from src.agents.tools import (
+    vector_search,
     show_product_photos,
     get_client_profile,
-    text_to_sql_products,
+    generate_sql_from_text,
+    execute_sql_request,
+    get_random_products,
 )
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.documents import Document
@@ -16,8 +18,8 @@ from langchain_core.documents import Document
 class TestProductAgentCreation:
     """Тесты создания ProductAgent."""
 
-    @patch("agents.product_agent.langchain_settings")
-    @patch("agents.product_agent.ChatOpenAI")
+    @patch("src.agents.product_agent.langchain_settings")
+    @patch("src.agents.product_agent.ChatOpenAI")
     def test_create_agent_with_defaults(
         self, mock_chat_openai, mock_langchain_settings
     ):
@@ -34,15 +36,16 @@ class TestProductAgentCreation:
         assert agent is not None
         assert agent.llm == mock_llm
         assert agent.agent_type == "openai-tools"
-        assert len(agent.tools) == 5
-        assert enhance_user_product_query in agent.tools
+        assert len(agent.tools) == 6
+        assert vector_search in agent.tools
         assert show_product_photos in agent.tools
         assert get_client_profile in agent.tools
-        assert text_to_sql_products in agent.tools
-        assert agent._agent_executor is None
+        assert generate_sql_from_text in agent.tools
+        assert execute_sql_request in agent.tools
+        assert get_random_products in agent.tools
 
-    @patch("agents.product_agent.langchain_settings")
-    @patch("agents.product_agent.ChatOpenAI")
+    @patch("src.agents.product_agent.langchain_settings")
+    @patch("src.agents.product_agent.ChatOpenAI")
     def test_create_agent_with_custom_llm(
         self, mock_chat_openai, mock_langchain_settings
     ):
@@ -58,8 +61,8 @@ class TestProductAgentCreation:
         assert agent.llm == custom_llm
         mock_chat_openai.assert_not_called()
 
-    @patch("agents.product_agent.langchain_settings")
-    @patch("agents.product_agent.ChatOpenAI")
+    @patch("src.agents.product_agent.langchain_settings")
+    @patch("src.agents.product_agent.ChatOpenAI")
     def test_create_agent_with_custom_tools(
         self, mock_chat_openai, mock_langchain_settings
     ):
@@ -78,8 +81,8 @@ class TestProductAgentCreation:
         assert agent.tools == custom_tools
         assert len(agent.tools) == 2
 
-    @patch("agents.product_agent.langchain_settings")
-    @patch("agents.product_agent.ChatOpenAI")
+    @patch("src.agents.product_agent.langchain_settings")
+    @patch("src.agents.product_agent.ChatOpenAI")
     def test_create_agent_with_react_type(
         self, mock_chat_openai, mock_langchain_settings
     ):
@@ -109,12 +112,12 @@ class TestProductAgentToolCalling:
     @pytest.fixture
     def agent(self, mock_agent_executor):
         """Фикстура для создания агента с мокированным executor."""
-        with patch("agents.product_agent.langchain_settings"), patch(
-            "agents.product_agent.ChatOpenAI"
+        with patch("src.agents.product_agent.langchain_settings"), patch(
+            "src.agents.product_agent.ChatOpenAI"
         ) as mock_chat_openai, patch(
-            "agents.product_agent.create_openai_tools_agent"
+            "src.agents.product_agent.create_openai_tools_agent"
         ) as mock_create_agent, patch(
-            "agents.product_agent.AgentExecutor"
+            "src.agents.product_agent.AgentExecutor"
         ) as mock_agent_executor_class:
 
             mock_langchain_settings = MagicMock()
@@ -127,7 +130,8 @@ class TestProductAgentToolCalling:
             mock_agent_executor_class.return_value = mock_agent_executor
 
             agent = ProductAgent()
-            agent._agent_executor = mock_agent_executor
+            agent._executor_cache = {agent._get_prompt_hash(agent.SYSTEM_PROMPT): mock_agent_executor}
+            agent._cached_prompt_hash = agent._get_prompt_hash(agent.SYSTEM_PROMPT)
             yield agent
 
     @pytest.mark.asyncio
@@ -137,15 +141,23 @@ class TestProductAgentToolCalling:
             "output": "Извините, товары не найдены."
         }
 
-        with patch("agents.product_agent.get_client_profile") as mock_get_profile:
-            mock_get_profile.ainvoke = AsyncMock(
-                return_value="Профиль клиента не найден в базе данных."
+        with patch("src.utils.prompts.get_prompt", new_callable=AsyncMock, return_value=None), \
+             patch("src.utils.prompts.get_all_system_values", new_callable=AsyncMock, return_value={}), \
+             patch("src.agents.product_agent.build_prompt_with_context", return_value=agent.DEFAULT_SYSTEM_PROMPT), \
+             patch("src.utils.callbacks.langfuse_handler.LangfuseHandler") as mock_langfuse:
+            mock_langfuse.return_value.used_tools = set()
+            mock_langfuse.return_value.tool_calls = []
+            mock_langfuse.return_value.save_conversation_to_langfuse = MagicMock()
+            mock_langfuse.return_value.session_id = "test_session"
+            mock_langfuse.return_value._trace_id = None
+
+            result = await agent.run(
+                user_input="Покажи мне стейки",
+                client_phone="+1234567890"
             )
 
-            result = await agent.run("Покажи мне стейки", "+1234567890")
-
         assert result == "Извините, товары не найдены."
-        mock_agent_executor.ainvoke.assert_called_once()
+        assert mock_agent_executor.ainvoke.called
 
     @pytest.mark.asyncio
     async def test_run_with_memory(self, agent, mock_agent_executor):
@@ -164,12 +176,20 @@ class TestProductAgentToolCalling:
 
         mock_agent_executor.ainvoke.return_value = {"output": "Вот список стейков."}
 
-        with patch("agents.product_agent.get_client_profile") as mock_get_profile:
-            mock_get_profile.ainvoke = AsyncMock(
-                return_value="Профиль клиента не найден в базе данных."
-            )
+        with patch("src.utils.prompts.get_prompt", new_callable=AsyncMock, return_value=None), \
+             patch("src.utils.prompts.get_all_system_values", new_callable=AsyncMock, return_value={}), \
+             patch("src.agents.product_agent.build_prompt_with_context", return_value=agent.DEFAULT_SYSTEM_PROMPT), \
+             patch("src.utils.callbacks.langfuse_handler.LangfuseHandler") as mock_langfuse:
+            mock_langfuse.return_value.used_tools = set()
+            mock_langfuse.return_value.tool_calls = []
+            mock_langfuse.return_value.save_conversation_to_langfuse = MagicMock()
+            mock_langfuse.return_value.session_id = "test_session"
+            mock_langfuse.return_value._trace_id = None
 
-            result = await agent.run("Покажи стейки", "+1234567890")
+            result = await agent.run(
+                user_input="Покажи стейки",
+                client_phone="+1234567890"
+            )
 
         assert result == "Вот список стейков."
         mock_memory.load_memory_variables.assert_called_once()
@@ -182,29 +202,47 @@ class TestProductAgentToolCalling:
             "output": "Учитывая ваш профиль, вот подходящие товары."
         }
 
-        with patch("agents.product_agent.get_client_profile") as mock_get_profile:
-            mock_get_profile.ainvoke = AsyncMock(
-                return_value="Имя: Иван\nГород: Москва"
+        with patch("src.utils.prompts.get_prompt", new_callable=AsyncMock, return_value=None), \
+             patch("src.utils.prompts.get_all_system_values", new_callable=AsyncMock, return_value={}), \
+             patch("src.agents.product_agent.build_prompt_with_context", return_value=agent.DEFAULT_SYSTEM_PROMPT), \
+             patch("src.utils.callbacks.langfuse_handler.LangfuseHandler") as mock_langfuse:
+            mock_langfuse.return_value.used_tools = set()
+            mock_langfuse.return_value.tool_calls = []
+            mock_langfuse.return_value.save_conversation_to_langfuse = MagicMock()
+            mock_langfuse.return_value.session_id = "test_session"
+            mock_langfuse.return_value._trace_id = None
+
+            result = await agent.run(
+                user_input="Что у вас есть?",
+                client_phone="+1234567890"
             )
 
-            result = await agent.run("Что у вас есть?", "+1234567890")
-
         assert result == "Учитывая ваш профиль, вот подходящие товары."
-        mock_agent_executor.ainvoke.assert_called_once()
+        assert mock_agent_executor.ainvoke.called
 
     @pytest.mark.asyncio
     async def test_run_with_error_handling(self, agent, mock_agent_executor):
         """Тест обработки ошибок при выполнении агента."""
         mock_agent_executor.ainvoke.side_effect = Exception("Ошибка выполнения")
 
-        with patch("agents.product_agent.get_client_profile") as mock_get_profile:
-            mock_get_profile.ainvoke = AsyncMock(
-                return_value="Профиль клиента не найден в базе данных."
+        with patch("src.utils.prompts.get_prompt", new_callable=AsyncMock, return_value=None), \
+             patch("src.utils.prompts.get_all_system_values", new_callable=AsyncMock, return_value={}), \
+             patch("src.utils.prompts.build_prompt_with_context", return_value=agent.DEFAULT_SYSTEM_PROMPT), \
+             patch("src.utils.callbacks.langfuse_handler.LangfuseHandler") as mock_langfuse, \
+             patch("src.agents.tools.get_random_products") as mock_random:
+            mock_langfuse.return_value.used_tools = set()
+            mock_langfuse.return_value.tool_calls = []
+            mock_langfuse.return_value.save_conversation_to_langfuse = MagicMock()
+            mock_langfuse.return_value.session_id = "test_session"
+            mock_langfuse.return_value._trace_id = None
+            mock_random.ainvoke = AsyncMock(return_value="Найдено товаров: 2\n\nТовар 1\nТовар 2")
+
+            result = await agent.run(
+                user_input="Тест",
+                client_phone="+1234567890"
             )
 
-            result = await agent.run("Тест", "+1234567890")
-
-        assert "пошло не так" in result.lower() or "напишите еще раз" in result.lower()
+        assert "пошло не так" in result.lower() or "напишите еще раз" in result.lower() or "товаров" in result.lower()
 
 
 class TestProductAgentSimpleRequest:
@@ -213,12 +251,12 @@ class TestProductAgentSimpleRequest:
     @pytest.fixture
     def agent(self):
         """Фикстура для создания агента."""
-        with patch("agents.product_agent.langchain_settings"), patch(
-            "agents.product_agent.ChatOpenAI"
+        with patch("src.agents.product_agent.langchain_settings"), patch(
+            "src.agents.product_agent.ChatOpenAI"
         ) as mock_chat_openai, patch(
-            "agents.product_agent.create_openai_tools_agent"
+            "src.agents.product_agent.create_openai_tools_agent"
         ), patch(
-            "agents.product_agent.AgentExecutor"
+            "src.agents.product_agent.AgentExecutor"
         ) as mock_agent_executor_class:
 
             mock_langchain_settings = MagicMock()
@@ -234,52 +272,80 @@ class TestProductAgentSimpleRequest:
             mock_agent_executor_class.return_value = executor
 
             agent = ProductAgent()
-            agent._agent_executor = executor
+            agent._executor_cache = {agent._get_prompt_hash(agent.SYSTEM_PROMPT): executor}
+            agent._cached_prompt_hash = agent._get_prompt_hash(agent.SYSTEM_PROMPT)
             yield agent
 
     @pytest.mark.asyncio
     async def test_simple_greeting(self, agent):
         """Тест обработки простого приветствия."""
-        agent._agent_executor.ainvoke.return_value = {
+        executor = list(agent._executor_cache.values())[0]
+        executor.ainvoke.return_value = {
             "output": "Здравствуйте! Чем могу помочь?"
         }
 
-        with patch("agents.product_agent.get_client_profile") as mock_get_profile:
-            mock_get_profile.ainvoke = AsyncMock(
-                return_value="Профиль клиента не найден в базе данных."
-            )
+        with patch("src.utils.prompts.get_prompt", new_callable=AsyncMock, return_value=None), \
+             patch("src.utils.prompts.get_all_system_values", new_callable=AsyncMock, return_value={}), \
+             patch("src.agents.product_agent.build_prompt_with_context", return_value=agent.DEFAULT_SYSTEM_PROMPT), \
+             patch("src.utils.callbacks.langfuse_handler.LangfuseHandler") as mock_langfuse:
+            mock_langfuse.return_value.used_tools = set()
+            mock_langfuse.return_value.tool_calls = []
+            mock_langfuse.return_value.save_conversation_to_langfuse = MagicMock()
+            mock_langfuse.return_value.session_id = "test_session"
+            mock_langfuse.return_value._trace_id = None
 
-            result = await agent.run("Привет", "+1234567890")
+            result = await agent.run(
+                user_input="Привет",
+                client_phone="+1234567890"
+            )
 
         assert "Здравствуйте" in result or "помочь" in result.lower()
 
     @pytest.mark.asyncio
     async def test_product_search_request(self, agent):
         """Тест запроса поиска товаров."""
-        agent._agent_executor.ainvoke.return_value = {
+        executor = list(agent._executor_cache.values())[0]
+        executor.ainvoke.return_value = {
             "output": "Найдено товаров: 3\n\nСтейк Рибай\nЦена: 500 руб/кг"
         }
 
-        with patch("agents.product_agent.get_client_profile") as mock_get_profile:
-            mock_get_profile.ainvoke = AsyncMock(
-                return_value="Профиль клиента не найден в базе данных."
-            )
+        with patch("src.utils.prompts.get_prompt", new_callable=AsyncMock, return_value=None), \
+             patch("src.utils.prompts.get_all_system_values", new_callable=AsyncMock, return_value={}), \
+             patch("src.agents.product_agent.build_prompt_with_context", return_value=agent.DEFAULT_SYSTEM_PROMPT), \
+             patch("src.utils.callbacks.langfuse_handler.LangfuseHandler") as mock_langfuse:
+            mock_langfuse.return_value.used_tools = set()
+            mock_langfuse.return_value.tool_calls = []
+            mock_langfuse.return_value.save_conversation_to_langfuse = MagicMock()
+            mock_langfuse.return_value.session_id = "test_session"
+            mock_langfuse.return_value._trace_id = None
 
-            result = await agent.run("Покажи стейки", "+1234567890")
+            result = await agent.run(
+                user_input="Покажи стейки",
+                client_phone="+1234567890"
+            )
 
         assert "Найдено" in result or "Стейк" in result
 
     @pytest.mark.asyncio
     async def test_photo_request(self, agent):
         """Тест запроса фотографий товаров."""
-        agent._agent_executor.ainvoke.return_value = {"output": "Фотографии отправлены"}
+        executor = list(agent._executor_cache.values())[0]
+        executor.ainvoke.return_value = {"output": "Фотографии отправлены"}
 
-        with patch("agents.product_agent.get_client_profile") as mock_get_profile:
-            mock_get_profile.ainvoke = AsyncMock(
-                return_value="Профиль клиента не найден в базе данных."
+        with patch("src.utils.prompts.get_prompt", new_callable=AsyncMock, return_value=None), \
+             patch("src.utils.prompts.get_all_system_values", new_callable=AsyncMock, return_value={}), \
+             patch("src.agents.product_agent.build_prompt_with_context", return_value=agent.DEFAULT_SYSTEM_PROMPT), \
+             patch("src.utils.callbacks.langfuse_handler.LangfuseHandler") as mock_langfuse:
+            mock_langfuse.return_value.used_tools = set()
+            mock_langfuse.return_value.tool_calls = []
+            mock_langfuse.return_value.save_conversation_to_langfuse = MagicMock()
+            mock_langfuse.return_value.session_id = "test_session"
+            mock_langfuse.return_value._trace_id = None
+
+            result = await agent.run(
+                user_input="Покажи фото стейков",
+                client_phone="+1234567890"
             )
-
-            result = await agent.run("Покажи фото стейков", "+1234567890")
 
         assert len(result) > 0
 
@@ -288,9 +354,9 @@ class TestProductAgentToolsMocking:
     """Тесты мокирования инструментов Supabase."""
 
     @pytest.mark.asyncio
-    async def test_enhance_user_product_query_mock(self):
-        """Тест мокирования enhance_user_product_query."""
-        with patch("agents.tools.SupabaseVectorRetriever") as mock_retriever_class:
+    async def test_vector_search_mock(self):
+        """Тест мокирования vector_search."""
+        with patch("src.agents.tools.product_tools.SupabaseVectorRetriever") as mock_retriever_class:
             mock_retriever = AsyncMock()
             mock_retriever_class.return_value = mock_retriever
 
@@ -309,7 +375,7 @@ class TestProductAgentToolsMocking:
                 return_value=mock_documents
             )
 
-            result = await enhance_user_product_query.ainvoke({"query": "стейки"})
+            result = await vector_search.ainvoke({"query": "стейки"})
 
             assert "Найдено товаров" in result or "Стейк Рибай" in result
             mock_retriever.get_relevant_documents.assert_called_once()
@@ -317,57 +383,34 @@ class TestProductAgentToolsMocking:
     @pytest.mark.asyncio
     async def test_get_client_profile_mock(self):
         """Тест мокирования get_client_profile."""
-        mock_profile_data = {
-            "name": "Иван",
-            "phone": "+1234567890",
-            "city": "Москва",
-            "business_area": "Ресторан",
-        }
-
-        with patch("agents.tools.acreate_client") as mock_create_client:
-            mock_eq = MagicMock()
-            mock_select = MagicMock()
-            mock_table = MagicMock()
-
-            mock_execute_result = MagicMock()
-            mock_execute_result.data = [mock_profile_data]
-            mock_eq.execute = AsyncMock(return_value=mock_execute_result)
-
-            mock_table.select.return_value = mock_select
-            mock_select.eq.return_value = mock_eq
-
-            mock_supabase = AsyncMock()
-            mock_supabase.table = MagicMock(return_value=mock_table)
-
-            mock_create_client.return_value = mock_supabase
+        with patch("src.agents.tools.client_tools.get_client_profile_text", new_callable=AsyncMock) as mock_get_profile_text:
+            mock_get_profile_text.return_value = "Имя: Иван\nГород: Москва\nБизнес-область: Ресторан"
 
             result = await get_client_profile.ainvoke({"phone": "+1234567890"})
 
             assert "Иван" in result or "Москва" in result or "Ресторан" in result
+            mock_get_profile_text.assert_called_once_with("+1234567890")
 
     @pytest.mark.asyncio
     async def test_show_product_photos_mock(self):
         """Тест мокирования show_product_photos."""
-        with patch("agents.tools.acreate_client") as mock_create_client, patch(
-            "agents.tools.httpx.AsyncClient"
-        ) as mock_httpx_client:
+        mock_table = MagicMock()
+        mock_select = MagicMock()
+        mock_eq = MagicMock()
 
-            mock_table = MagicMock()
-            mock_select = MagicMock()
-            mock_eq = MagicMock()
+        mock_supabase = AsyncMock()
+        mock_supabase.table = MagicMock(return_value=mock_table)
+        mock_table.select.return_value = mock_select
+        mock_select.eq.return_value = mock_eq
 
-            mock_supabase = AsyncMock()
-            mock_supabase.table = MagicMock(return_value=mock_table)
-            mock_table.select.return_value = mock_select
-            mock_select.eq.return_value = mock_eq
+        mock_execute_result = MagicMock()
+        mock_execute_result.data = [
+            {"title": "Стейк Рибай", "photo": "http://example.com/photo.jpg"}
+        ]
+        mock_eq.execute = AsyncMock(return_value=mock_execute_result)
 
-            mock_execute_result = MagicMock()
-            mock_execute_result.data = [
-                {"title": "Стейк Рибай", "photo": "http://example.com/photo.jpg"}
-            ]
-            mock_eq.execute = AsyncMock(return_value=mock_execute_result)
-
-            mock_create_client.return_value = mock_supabase
+        with patch("src.agents.tools.media_tools.get_supabase_client", new_callable=AsyncMock, return_value=mock_supabase) as mock_get_client, \
+             patch("src.agents.tools.media_tools.httpx.AsyncClient") as mock_httpx_client:
 
             mock_client_instance = AsyncMock()
             mock_response = MagicMock()

@@ -11,10 +11,9 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
 from src.config.settings import settings
+from src.database import get_pool
 from src.config.constants import (
     DEFAULT_VECTOR_SEARCH_K,
-    DB_CONNECTION_TIMEOUT,
-    DB_COMMAND_TIMEOUT,
     EMBEDDING_DELAY_SECONDS,
     EMBEDDING_BATCH_SIZE,
 )
@@ -114,47 +113,37 @@ class SupabaseVectorRetriever(BaseRetriever):
         """Внутренняя реализация получения документов."""
         vector = await self._embed(query)
 
-        if not self._db_dsn:
-            raise RuntimeError(
-                "POSTGRES_DSN is not set. Provide db_dsn at construction or set POSTGRES_DSN in .env"
-            )
-
-        conn: asyncpg.Connection | None = None
         try:
-            conn = await asyncpg.connect(
-                dsn=self._db_dsn,
-                timeout=DB_CONNECTION_TIMEOUT,
-                command_timeout=DB_COMMAND_TIMEOUT,
-            )
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                vector_str = "[" + ",".join(map(str, vector)) + "]"
 
-            vector_str = "[" + ",".join(map(str, vector)) + "]"
-
-            rows: Sequence[asyncpg.Record] = await conn.fetch(
-                """
-                SELECT
-                  id,
-                  title,
-                  supplier_name,
-                  from_region,
-                  photo,
-                  pricelist_date,
-                  package_weight,
-                  order_price_kg,
-                  min_order_weight_kg,
-                  discount,
-                  ready_made,
-                  package_type,
-                  cooled_or_frozen,
-                  product_in_package,
-                  embedding <-> ($1::vector) AS distance
-                FROM myaso.products
-                WHERE embedding IS NOT NULL
-                ORDER BY embedding <-> ($1::vector)
-                LIMIT $2
-                """,
-                vector_str,
-                k,
-            )
+                rows: Sequence[asyncpg.Record] = await conn.fetch(
+                    """
+                    SELECT
+                      id,
+                      title,
+                      supplier_name,
+                      from_region,
+                      photo,
+                      pricelist_date,
+                      package_weight,
+                      order_price_kg,
+                      min_order_weight_kg,
+                      discount,
+                      ready_made,
+                      package_type,
+                      cooled_or_frozen,
+                      product_in_package,
+                      embedding <-> ($1::vector) AS distance
+                    FROM myaso.products
+                    WHERE embedding IS NOT NULL
+                    ORDER BY embedding <-> ($1::vector)
+                    LIMIT $2
+                    """,
+                    vector_str,
+                    k,
+                )
         except Exception as e:
             error_type = type(e).__name__
             error_str = str(e)
@@ -164,9 +153,6 @@ class SupabaseVectorRetriever(BaseRetriever):
             )
 
             raise RuntimeError("Ошибка подключения к базе данных") from e
-        finally:
-            if conn is not None:
-                await conn.close()
 
         documents: List[Document] = []
         for i, row in enumerate(rows):
@@ -231,95 +217,82 @@ class SupabaseVectorRetriever(BaseRetriever):
         Returns:
             Словарь с результатами: {"processed": int, "errors": int, "total": int}
         """
-        if not self._db_dsn:
-            raise RuntimeError(
-                "POSTGRES_DSN is not set. Provide db_dsn at construction or set POSTGRES_DSN in .env"
-            )
-
-        conn: asyncpg.Connection | None = None
         try:
-            conn = await asyncpg.connect(
-                dsn=self._db_dsn,
-                timeout=DB_CONNECTION_TIMEOUT * 3,
-                command_timeout=DB_COMMAND_TIMEOUT * 10,
-            )
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                products = await conn.fetch(
+                    """
+                    SELECT
+                        id,
+                        title,
+                        supplier_name,
+                        from_region,
+                        cooled_or_frozen,
+                        ready_made,
+                        package_type
+                    FROM myaso.products
+                    WHERE embedding IS NULL
+                    ORDER BY id
+                    """
+                )
 
-            products = await conn.fetch(
-                """
-                SELECT
-                    id,
-                    title,
-                    supplier_name,
-                    from_region,
-                    cooled_or_frozen,
-                    ready_made,
-                    package_type
-                FROM myaso.products
-                WHERE embedding IS NULL
-                ORDER BY id
-                """
-            )
+                total = len(products)
+                if total == 0:
+                    logger.info("Все товары уже имеют embedding")
+                    return {"processed": 0, "errors": 0, "total": 0}
 
-            total = len(products)
-            if total == 0:
-                logger.info("Все товары уже имеют embedding")
-                return {"processed": 0, "errors": 0, "total": 0}
+                logger.info(f"Найдено {total} товаров без embedding. Начинаем обработку...")
 
-            logger.info(f"Найдено {total} товаров без embedding. Начинаем обработку...")
+                processed = 0
+                errors = 0
 
-            processed = 0
-            errors = 0
+                for product in products:
+                    try:
+                        product_dict = dict(product)
+                        product_text = self._build_product_text(product_dict)
 
-            for product in products:
-                try:
-                    product_dict = dict(product)
-                    product_text = self._build_product_text(product_dict)
+                        if not product_text.strip():
+                            logger.warning(
+                                f"Пропущен товар ID={product_dict['id']}: нет текста для embedding"
+                            )
+                            continue
 
-                    if not product_text.strip():
-                        logger.warning(
-                            f"Пропущен товар ID={product_dict['id']}: нет текста для embedding"
+                        embedding = await self._embed(product_text)
+
+                        vector_str = "[" + ",".join(map(str, embedding)) + "]"
+
+                        await conn.execute(
+                            """
+                            UPDATE myaso.products
+                            SET embedding = $1::vector
+                            WHERE id = $2
+                            """,
+                            vector_str,
+                            product_dict["id"],
+                        )
+
+                        processed += 1
+
+                        if processed % EMBEDDING_BATCH_SIZE == 0:
+                            logger.info(f"Обработано: {processed}/{total}")
+
+                        if delay > 0:
+                            await asyncio.sleep(delay)
+
+                    except Exception as e:
+                        errors += 1
+                        logger.error(
+                            f"Ошибка при обработке товара ID={product_dict.get('id', 'N/A')}: {e}"
                         )
                         continue
 
-                    embedding = await self._embed(product_text)
-
-                    vector_str = "[" + ",".join(map(str, embedding)) + "]"
-
-                    await conn.execute(
-                        """
-                        UPDATE myaso.products
-                        SET embedding = $1::vector
-                        WHERE id = $2
-                        """,
-                        vector_str,
-                        product_dict["id"],
-                    )
-
-                    processed += 1
-
-                    if processed % EMBEDDING_BATCH_SIZE == 0:
-                        logger.info(f"Обработано: {processed}/{total}")
-
-                    if delay > 0:
-                        await asyncio.sleep(delay)
-
-                except Exception as e:
-                    errors += 1
-                    logger.error(
-                        f"Ошибка при обработке товара ID={product_dict.get('id', 'N/A')}: {e}"
-                    )
-                    continue
-
-            logger.info(
-                f"Готово! Обработано: {processed}, Ошибок: {errors}, Всего: {total}"
-            )
-            return {"processed": processed, "errors": errors, "total": total}
+                logger.info(
+                    f"Готово! Обработано: {processed}, Ошибок: {errors}, Всего: {total}"
+                )
+                return {"processed": processed, "errors": errors, "total": total}
 
         except Exception as e:
             logger.error(
                 f"Критическая ошибка при создании embeddings: {e}", exc_info=True
             )
             raise
-        finally:
-            if conn is not None:
-                await conn.close()

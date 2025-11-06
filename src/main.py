@@ -1,25 +1,13 @@
-import logging
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from src.routers import ai_router
+from src.routers import ai_router, health
 from src.utils.logger import setup_logging
-
+from src.middleware.cors_middleware import setup_cors
 
 setup_logging()
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+setup_cors(app)
 
 app.include_router(ai_router.router)
-
-
-@app.get("/health", status_code=200)
-def read_root():
-    return {"status": "healthy"}
+app.include_router(health.router)

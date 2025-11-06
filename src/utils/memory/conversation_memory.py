@@ -17,10 +17,9 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from supabase import acreate_client, AClient, AsyncClientOptions
+from supabase import AClient
 
-from src.config.settings import settings
-from src.utils import AsyncMixin
+from src.utils import AsyncMixin, get_supabase_client
 
 
 _ROLE_TO_LC: Dict[str, type[BaseMessage]] = {
@@ -62,11 +61,7 @@ class SupabaseConversationMemory(AsyncMixin, BaseChatMessageHistory):
         self.supabase: AClient | None = None
 
     async def __ainit__(self) -> None:
-        self.supabase = await acreate_client(
-            settings.supabase.supabase_url,
-            settings.supabase.supabase_service_key,
-            options=AsyncClientOptions(schema="myaso"),
-        )
+        self.supabase = await get_supabase_client()
 
     async def add_messages(self, messages: Sequence[BaseMessage]) -> None:
         """Добавляет список сообщений в историю."""

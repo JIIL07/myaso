@@ -1,33 +1,21 @@
 from fastapi import APIRouter, BackgroundTasks
-from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import logging
 from datetime import datetime, timedelta
-from src.schemas import (
+from src.models import (
     UserMessageRequest,
     InitConverastionRequest,
     ResetConversationRequest,
+    ClientProfileResponse,
 )
-from src.config.constants import (
-    DEFAULT_SQL_LIMIT,
-    MAX_SQL_RETRY_ATTEMPTS,
-    HTTP_TIMEOUT_SECONDS,
-)
-from agents.factory import AgentFactory
-from src.utils import remove_markdown_symbols, extract_product_titles_from_text
-from src.utils.langchain_memory import SupabaseConversationMemory
+from src.agents.factory import AgentFactory
+from src.utils import remove_markdown_symbols
+from src.utils.memory import SupabaseConversationMemory
 from src.utils.phone_validator import normalize_phone, validate_phone
-from agents.tools import (
-    get_client_profile,
-    get_random_products,
-    generate_sql_from_text,
-    execute_sql_conditions,
-    show_product_photos,
-)
-from supabase import acreate_client, AClient, AsyncClientOptions
 from src.config.settings import settings
-from src.utils.prompts import get_prompt
-import httpx
+from src.utils import get_supabase_client
+from src.services.whatsapp_service import send_message
+from supabase import AClient
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +28,6 @@ async def process_conversation_background(request: UserMessageRequest):
     Args:
         request: Запрос с сообщением пользователя и номером телефона
     """
-    logger.info(
-        f"[processConversation] Начало обработки запроса для {request.client_phone}"
-    )
 
     try:
         memory = await SupabaseConversationMemory(request.client_phone)
@@ -57,28 +42,15 @@ async def process_conversation_background(request: UserMessageRequest):
             endpoint_name="processConversation",
         )
 
-        logger.info(
-            f"[processConversation] Получен ответ от агента для {request.client_phone}, длина: {len(response_text)}"
-        )
 
         try:
-            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-                await client.post(
-                    settings.whatsapp.send_message_url,
-                    json={
-                        "recipient": request.client_phone,
-                        "message": remove_markdown_symbols(response_text),
-                    },
-                )
-            logger.info(
-                f"[processConversation] Сообщение отправлено в WhatsApp для {request.client_phone}"
+            await send_message(
+                request.client_phone,
+                remove_markdown_symbols(response_text),
             )
         except Exception as e:
-            logger.warning(f"[processConversation] Ошибка отправки в WhatsApp: {e}")
+            logger.error(f"ОШИБКА: Ошибка отправки в WhatsApp для {request.client_phone}: {e}")
 
-        logger.info(
-            f"[processConversation] Завершение обработки для {request.client_phone}"
-        )
         return {"success": True}
 
     except Exception as e:
@@ -87,14 +59,10 @@ async def process_conversation_background(request: UserMessageRequest):
             exc_info=True,
         )
         try:
-            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-                await client.post(
-                    settings.whatsapp.send_message_url,
-                    json={
-                        "recipient": request.client_phone,
-                        "message": "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
-                    },
-                )
+            await send_message(
+                request.client_phone,
+                "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
+            )
         except Exception:
             pass
 
@@ -122,7 +90,6 @@ async def process_conversation(
         return {"success": False, "error": "Invalid phone number"}
 
     request.client_phone = normalized_phone
-    logger.info(f"[processConversation] Получен запрос от {request.client_phone}")
     background_tasks.add_task(process_conversation_background, request)
     return {"success": True}
 
@@ -133,9 +100,6 @@ async def init_conversation_background(request: InitConverastionRequest):
     Args:
         request: Запрос с номером телефона клиента и темой беседы
     """
-    logger.info(
-        f"[initConversation] Начало обработки запроса для {request.client_phone}, topic: {request.topic}"
-    )
 
     try:
         memory = await SupabaseConversationMemory(request.client_phone)
@@ -144,71 +108,14 @@ async def init_conversation_background(request: InitConverastionRequest):
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
 
-        profile_text = (
-            await get_client_profile.ainvoke({"phone": request.client_phone})
-            or "Профиль клиента не найден."
-        )
+        welcome_input = f"""Сформируй короткое дружелюбное приветствие для клиента.
+Тема диалога: {request.topic}
+Для формирования приветствия:
+1. Получи профиль клиента (номер телефона: {request.client_phone})
+2. Получи товары по теме диалога "{request.topic}" используя подходящие инструменты
+3. Если есть товары с фотографиями, отправь их клиенту
+Поприветствуй дружелюбно со смайликами, будь позитивным и энергичным. Предложи помощь и ненавязчиво уточни запрос."""
 
-        products_text = ""
-        product_titles = []
-        text_conditions = request.topic
-        sql_conditions = None
-        last_error = None
-        sql_success = False
-
-        for attempt in range(1, MAX_SQL_RETRY_ATTEMPTS + 1):
-            try:
-                invoke_params = {
-                    "text_conditions": text_conditions,
-                    "attempt_number": attempt,
-                    "topic": request.topic,
-                }
-
-                if attempt > 1 and sql_conditions:
-                    invoke_params["previous_sql"] = sql_conditions
-
-                if attempt > 1 and last_error:
-                    invoke_params["error_message"] = str(last_error)
-
-                sql_conditions = await generate_sql_from_text.ainvoke(invoke_params)
-                products_text = await execute_sql_conditions.ainvoke(
-                    {"sql_conditions": sql_conditions, "limit": DEFAULT_SQL_LIMIT}
-                )
-                if products_text and "не найдены" not in products_text.lower():
-                    sql_success = True
-                    product_titles = extract_product_titles_from_text(products_text)
-                    break
-                else:
-                    raise ValueError("Товары не найдены")
-            except Exception as e:
-                last_error = e
-                logger.warning(
-                    f"[initConversation] Попытка {attempt} SQL запроса не удалась: {e}"
-                )
-
-        if not sql_success:
-            logger.warning(
-                f"[initConversation] Все {MAX_SQL_RETRY_ATTEMPTS} попытки SQL запроса не удались, используем случайные товары"
-            )
-            try:
-                products_text = await get_random_products.ainvoke({"limit": 10})
-                product_titles = extract_product_titles_from_text(products_text)
-            except Exception:
-                products_text = "Ассортимент будет обновлён позже."
-                product_titles = []
-
-        context_parts = []
-        context_parts.append(
-            "Сформируй короткое дружелюбное приветствие для клиента, учитывая его профиль и ассортимент.\n"
-        )
-        context_parts.append(f"Тема диалога: {request.topic}\n\n")
-        context_parts.append(f"Профиль клиента:\n{profile_text}\n\n")
-        context_parts.append(f"Ассортимент/подборка:\n{products_text}\n\n")
-        context_parts.append(
-            "Поприветствуй дружелюбно со смайликами, будь позитивным и энергичным. Предложи помощь и ненавязчиво уточни запрос."
-        )
-
-        welcome_input = "".join(context_parts)
         response_text = await agent.run(
             user_input=welcome_input,
             client_phone=request.client_phone,
@@ -218,18 +125,10 @@ async def init_conversation_background(request: InitConverastionRequest):
         )
 
         try:
-            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-                response = await client.post(
-                    settings.whatsapp.send_message_url,
-                    json={
-                        "recipient": request.client_phone,
-                        "message": remove_markdown_symbols(response_text),
-                    },
-                )
-                response.raise_for_status()
-                logger.info(
-                    f"[initConversation] Сообщение успешно отправлено для {request.client_phone}"
-                )
+            await send_message(
+                request.client_phone,
+                remove_markdown_symbols(response_text),
+            )
         except Exception as send_error:
             logger.error(
                 f"[initConversation] Ошибка отправки сообщения в WhatsApp для {request.client_phone}: {send_error}",
@@ -237,21 +136,6 @@ async def init_conversation_background(request: InitConverastionRequest):
             )
             raise
 
-        if product_titles:
-            logger.info(
-                f"[initConversation] Отправка фотографий {len(product_titles)} товаров для {request.client_phone}"
-            )
-            try:
-                photos_result = await show_product_photos.ainvoke(
-                    {"product_titles": product_titles, "phone": request.client_phone}
-                )
-                logger.info(
-                    f"[initConversation] Результат отправки фото: {photos_result}"
-                )
-            except Exception as photo_error:
-                logger.warning(
-                    f"[initConversation] Ошибка отправки фотографий: {photo_error}"
-                )
 
         return {"success": True}
 
@@ -261,14 +145,10 @@ async def init_conversation_background(request: InitConverastionRequest):
             exc_info=True,
         )
         try:
-            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-                await client.post(
-                    settings.whatsapp.send_message_url,
-                    json={
-                        "recipient": request.client_phone,
-                        "message": "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
-                    },
-                )
+            await send_message(
+                request.client_phone,
+                "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
+            )
         except Exception as send_error:
             logger.error(
                 f"[initConversation] Ошибка отправки сообщения об ошибке: {send_error}"
@@ -298,21 +178,8 @@ async def init_conversation(
         return {"success": False, "error": "Invalid phone number"}
 
     request.client_phone = normalized_phone
-    logger.info(
-        f"[initConversation] Получен запрос от {request.client_phone}, topic: {request.topic}"
-    )
     background_tasks.add_task(init_conversation_background, request)
     return {"success": True}
-
-
-class ClientProfileResponse(BaseModel):
-    """Модель ответа с профилем клиента."""
-
-    client_phone: str
-    profile: str
-    message_count: int
-    last_order: Optional[Dict[str, Any]] = None
-    status: str
 
 
 @router.get("/getProfile", response_model=ClientProfileResponse, status_code=200)
@@ -328,6 +195,7 @@ async def get_profile(client_phone: str):
     client_phone = normalize_phone(client_phone)
 
     try:
+        from src.agents.tools import get_client_profile
         profile_text = await get_client_profile.ainvoke({"phone": client_phone})
     except Exception:
         profile_text = "Профиль клиента не найден в базе данных."
@@ -337,11 +205,7 @@ async def get_profile(client_phone: str):
     supabase: AClient | None = None
 
     try:
-        supabase = await acreate_client(
-            settings.supabase.supabase_url,
-            settings.supabase.supabase_service_key,
-            options=AsyncClientOptions(schema="myaso"),
-        )
+        supabase = await get_supabase_client()
 
         history_resp = (
             await supabase.table("conversation_history")
@@ -507,9 +371,6 @@ async def get_conversation_history(phone: str, days: int = 7):
                 "history": [],
             }
 
-        logger.info(
-            f"[get_conversation_history] Найдено {len(history)} разговоров для {normalized_phone}"
-        )
 
         return {
             "phone": normalized_phone,
