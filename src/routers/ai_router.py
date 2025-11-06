@@ -7,7 +7,15 @@ from agents.factory import AgentFactory
 from src.utils import remove_markdown_symbols
 from src.utils.langchain_memory import SupabaseConversationMemory
 from src.utils.phone_validator import normalize_phone, validate_phone
-from agents.tools import get_client_profile, enhance_user_product_query, get_random_products
+from agents.tools import (
+    get_client_profile,
+    get_random_products,
+    generate_sql_from_text,
+    execute_sql_conditions,
+    show_product_photos,
+    get_product_titles_from_sql_conditions,
+    get_random_product_titles,
+)
 from supabase import acreate_client, AClient, AsyncClientOptions
 from src.config.settings import settings
 from src.utils.prompts import get_prompt
@@ -133,115 +141,106 @@ async def init_conversation_background(request: InitConverastionRequest):
     logger.info(f"[initConversation] Начало обработки запроса для {request.client_phone}, topic: {request.topic}")
     langfuse = None
     trace = None
+    try:
+        langfuse = Langfuse()
+        trace = langfuse.trace(
+            name="initConversation",
+            user_id=request.client_phone,
+            input={"client_phone": request.client_phone, "topic": request.topic},
+            tags=["langchain", "agent", "init"],
+        )
+    except Exception:
+        pass
 
     try:
-        try:
-            langfuse = Langfuse()
-            trace = langfuse.trace(
-                name="initConversation",
-                user_id=request.client_phone,
-                input={
-                    "client_phone": request.client_phone,
-                    "topic": request.topic,
-                },
-                tags=["langchain", "agent", "init"],
-            )
-        except Exception:
-            langfuse = None
-            trace = None
-
         memory = await SupabaseConversationMemory(request.client_phone)
-        try:
-            await memory.clear()
-        except Exception:
-            pass
+        await memory.clear()
 
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
 
-        db_prompt = None
-        try:
-            db_prompt = await get_prompt(request.topic)
-            if db_prompt:
-                logger.info(f"[initConversation] Загружен промпт из БД для topic '{request.topic}'")
-        except Exception as e:
-            logger.warning(f"[initConversation] Не удалось загрузить промпт для topic '{request.topic}': {e}")
-
-        profile_text = ""
-        try:
-            profile_text = await get_client_profile.ainvoke({"phone": request.client_phone})
-        except Exception as e:
-            logger.warning(f"[initConversation] Не удалось загрузить профиль: {e}")
-            profile_text = "Профиль клиента не найден."
+        profile_text = await get_client_profile.ainvoke({"phone": request.client_phone}) or "Профиль клиента не найден."
 
         products_text = ""
-        try:
-            seed_query = request.topic
-            rag_text = await enhance_user_product_query.ainvoke({"query": seed_query})
-            if rag_text and "не найдены" not in rag_text.lower():
-                products_text = rag_text
-            else:
-                raise ValueError("RAG empty")
-        except Exception:
+        product_titles = []
+        text_conditions = request.topic
+        sql_conditions = None
+        last_error = None
+        sql_success = False
+        
+        for attempt in range(1, 4):
             try:
-                random_products_text = await get_random_products.ainvoke({"limit": 10})
-                if random_products_text and "не найдены" not in random_products_text.lower():
-                    products_text = random_products_text
+                sql_conditions = await generate_sql_from_text.ainvoke({
+                    "text_conditions": text_conditions,
+                    "previous_sql": sql_conditions if attempt > 1 else None,
+                    "error_message": str(last_error) if attempt > 1 and last_error else None,
+                    "attempt_number": attempt
+                })
+                products_text = await execute_sql_conditions.ainvoke({"sql_conditions": sql_conditions, "limit": 15})
+                if products_text and "не найдены" not in products_text.lower():
+                    sql_success = True
+                    product_titles = await get_product_titles_from_sql_conditions.ainvoke({
+                        "sql_conditions": sql_conditions,
+                        "limit": 15
+                    })
+                    break
                 else:
-                    products_text = "Ассортимент будет обновлён позже."
+                    raise ValueError("Товары не найдены")
+            except Exception as e:
+                last_error = e
+                logger.warning(f"[initConversation] Попытка {attempt} SQL запроса не удалась: {e}")
+        
+        if not sql_success:
+            logger.warning(f"[initConversation] Все 3 попытки SQL запроса не удались, используем случайные товары")
+            try:
+                products_text = await get_random_products.ainvoke({"limit": 10})
+                product_titles = await get_random_product_titles.ainvoke({"limit": 10})
             except Exception:
                 products_text = "Ассортимент будет обновлён позже."
 
-        if db_prompt:
-            welcome_input = (
-                f"Ассортимент/подборка:\n{products_text}\n\n"
-                "Начни диалог с клиентом, используя системный промпт и ассортимент выше."
-            )
-        else:
-            welcome_input = (
-                "Сформируй короткое дружелюбное приветствие для клиента, учитывая его профиль и ассортимент.\n"
-                f"Тема диалога: {request.topic}\n\n"
-                f"Профиль клиента:\n{profile_text}\n\n"
-                f"Ассортимент/подборка:\n{products_text}\n\n"
-                "Поприветствуй дружелюбно со смайликами, будь позитивным и энергичным. Предложи помощь и ненавязчиво уточни запрос."
-            )
+        context_parts = []
+        context_parts.append("Сформируй короткое дружелюбное приветствие для клиента, учитывая его профиль и ассортимент.\n")
+        context_parts.append(f"Тема диалога: {request.topic}\n\n")
+        context_parts.append(f"Профиль клиента:\n{profile_text}\n\n")
+        context_parts.append(f"Ассортимент/подборка:\n{products_text}\n\n")
+        context_parts.append("Поприветствуй дружелюбно со смайликами, будь позитивным и энергичным. Предложи помощь и ненавязчиво уточни запрос.")
 
-        response_text = await agent.run(
-            user_input=welcome_input, 
-            client_phone=request.client_phone,
-            topic=request.topic
-        )
-        
-        logger.info(f"[initConversation] Получен ответ от агента для {request.client_phone}, длина: {len(response_text)}")
+        welcome_input = "".join(context_parts)
+        response_text = await agent.run(user_input=welcome_input, client_phone=request.client_phone, topic=request.topic, is_init_message=True)
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.post(
+                response = await client.post(
                     settings.whatsapp.send_message_url,
-                    json={
-                        "recipient": request.client_phone,
-                        "message": remove_markdown_symbols(response_text),
-                    },
+                    json={"recipient": request.client_phone, "message": remove_markdown_symbols(response_text)},
                 )
-            logger.info(f"[initConversation] Сообщение отправлено в WhatsApp для {request.client_phone}")
-        except Exception as e:
-            logger.warning(f"[initConversation] Ошибка отправки в WhatsApp: {e}")
+                response.raise_for_status()
+                logger.info(f"[initConversation] Сообщение успешно отправлено для {request.client_phone}")
+        except Exception as send_error:
+            logger.error(f"[initConversation] Ошибка отправки сообщения в WhatsApp для {request.client_phone}: {send_error}", exc_info=True)
+            raise
 
-        if trace is not None:
+        if product_titles:
+            logger.info(f"[initConversation] Отправка фотографий {len(product_titles)} товаров для {request.client_phone}")
             try:
-                trace.update(
-                    output={
-                        "response": response_text,
-                        "products": products_text,
-                    }
-                )
+                photos_result = await show_product_photos.ainvoke({
+                    "product_titles": product_titles,
+                    "phone": request.client_phone
+                })
+                logger.info(f"[initConversation] Результат отправки фото: {photos_result}")
+            except Exception as photo_error:
+                logger.warning(f"[initConversation] Ошибка отправки фотографий: {photo_error}")
+
+        if trace:
+            try:
+                trace.update(output={"response": response_text, "products": products_text})
             except Exception:
                 pass
 
-        logger.info(f"[initConversation] Завершение обработки для {request.client_phone}")
         return {"success": True}
 
     except Exception as e:
+        logger.error(f"[initConversation] Критическая ошибка для {request.client_phone}: {e}", exc_info=True)
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 await client.post(
@@ -251,8 +250,8 @@ async def init_conversation_background(request: InitConverastionRequest):
                         "message": "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
                     },
                 )
-        except Exception:
-            pass
+        except Exception as send_error:
+            logger.error(f"[initConversation] Ошибка отправки сообщения об ошибке: {send_error}")
 
         if trace is not None:
             try:

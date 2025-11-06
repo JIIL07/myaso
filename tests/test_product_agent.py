@@ -3,7 +3,14 @@ from unittest.mock import AsyncMock, MagicMock, patch, Mock
 from typing import Any
 
 from agents.product_agent import ProductAgent
-from agents.tools import enhance_user_product_query, show_product_photos, get_client_profile
+from agents.tools import (
+    enhance_user_product_query,
+    show_product_photos,
+    get_client_profile,
+    text_to_sql_products,
+    generate_sql_from_text,
+    execute_sql_conditions,
+)
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.documents import Document
 
@@ -27,10 +34,13 @@ class TestProductAgentCreation:
         assert agent is not None
         assert agent.llm == mock_llm
         assert agent.agent_type == "openai-tools"
-        assert len(agent.tools) == 3
+        assert len(agent.tools) == 6
         assert enhance_user_product_query in agent.tools
         assert show_product_photos in agent.tools
         assert get_client_profile in agent.tools
+        assert text_to_sql_products in agent.tools
+        assert generate_sql_from_text in agent.tools
+        assert execute_sql_conditions in agent.tools
         assert agent._agent_executor is None
 
     @patch("agents.product_agent.langchain_settings")
@@ -311,22 +321,28 @@ class TestProductAgentToolsMocking:
     @pytest.mark.asyncio
     async def test_show_product_photos_mock(self):
         """Тест мокирования show_product_photos."""
-        with patch("agents.tools.supabase_client") as mock_supabase, \
+        with patch("agents.tools.acreate_client") as mock_create_client, \
              patch("agents.tools.httpx.AsyncClient") as mock_httpx_client:
             
             mock_table = MagicMock()
             mock_select = MagicMock()
             mock_eq = MagicMock()
             
-            mock_supabase.table.return_value = mock_table
+            mock_supabase = AsyncMock()
+            mock_supabase.table = MagicMock(return_value=mock_table)
             mock_table.select.return_value = mock_select
             mock_select.eq.return_value = mock_eq
-            mock_eq.execute.return_value = MagicMock(data=[
-                {"title": "Стейк Рибай", "photo": "http://example.com/photo.jpg"}
-            ])
+            
+            mock_execute_result = MagicMock()
+            mock_execute_result.data = [{"title": "Стейк Рибай", "photo": "http://example.com/photo.jpg"}]
+            mock_eq.execute = AsyncMock(return_value=mock_execute_result)
+            
+            mock_create_client.return_value = mock_supabase
             
             mock_client_instance = AsyncMock()
-            mock_client_instance.post = AsyncMock()
+            mock_response = MagicMock()
+            mock_response.raise_for_status = MagicMock()
+            mock_client_instance.post = AsyncMock(return_value=mock_response)
             mock_httpx_client.return_value.__aenter__ = AsyncMock(return_value=mock_client_instance)
             mock_httpx_client.return_value.__aexit__ = AsyncMock(return_value=None)
 

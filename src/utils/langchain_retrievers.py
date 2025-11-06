@@ -95,7 +95,7 @@ class SupabaseVectorRetriever(BaseRetriever):
         """
         if k is None:
             k = self._k
-        return await self._get_relevant_documents_impl(query, k=k)
+        return await self._get_relevant_documents(query, k=k)
 
     async def _get_relevant_documents(self, query: str, k: int) -> List[Document]:
         """Внутренняя реализация получения документов."""

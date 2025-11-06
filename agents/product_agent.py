@@ -24,6 +24,9 @@ from agents.tools import (
     enhance_user_product_query,
     show_product_photos,
     get_client_profile,
+    text_to_sql_products,
+    generate_sql_from_text,
+    execute_sql_conditions,
 )
 from src.utils.prompts import (
     get_prompt,
@@ -107,7 +110,7 @@ class ProductAgent(BaseAgent):
             )
 
         if tools is None:
-            tools = [enhance_user_product_query, show_product_photos, get_client_profile]
+            tools = [enhance_user_product_query, show_product_photos, get_client_profile, text_to_sql_products, generate_sql_from_text, execute_sql_conditions]
 
         super().__init__(model=llm, tools=tools, config=kwargs)
         self.llm = llm
@@ -160,19 +163,17 @@ class ProductAgent(BaseAgent):
 
         return agent_executor
 
-    async def run(self, user_input: str, client_phone: str, topic: Optional[str] = None) -> str:
+    async def run(self, user_input: str, client_phone: str, topic: Optional[str] = None, is_init_message: bool = False) -> str:
         """Запускает агента для обработки запроса пользователя.
 
         Args:
             user_input: Текст запроса пользователя
             client_phone: Номер телефона клиента
             topic: Тема диалога для загрузки промпта из БД (опционально)
+            is_init_message: Если True, не сохраняет user_input в память (для системных промптов init)
 
         Returns:
             Строка с ответом агента
-
-        Raises:
-            Exception: При ошибке выполнения агента
         """
         logger.info(f"[ProductAgent.run] Начало выполнения для {client_phone}, topic: {topic}")
         try:
@@ -251,7 +252,10 @@ class ProductAgent(BaseAgent):
             else:
                 full_prompt_parts.append("Chat History: (пусто)")
             
-            full_prompt_parts.append(f"\nUser Input:\n{input_with_context}\n")
+            if is_init_message:
+                full_prompt_parts.append(f"\nInit Message (System):\n{input_with_context}\n")
+            else:
+                full_prompt_parts.append(f"\nUser Input:\n{input_with_context}\n")
             full_prompt_parts.append("=" * 50)
             
             full_prompt_text = "\n".join(full_prompt_parts)
@@ -275,8 +279,9 @@ class ProductAgent(BaseAgent):
 
             if self.memory is not None:
                 try:
-                    await self.memory.add_messages([HumanMessage(content=user_input)])
-                    await self.memory.add_messages([AIMessage(content=response_text)])
+                    if not is_init_message:
+                        await self.memory.add_messages([HumanMessage(content=user_input)])
+                        await self.memory.add_messages([AIMessage(content=response_text)])
                 except Exception as e:
                     logger.warning(f"Не удалось сохранить в память: {e}")
 

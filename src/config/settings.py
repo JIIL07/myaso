@@ -22,22 +22,6 @@ class OpenRouterSettings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-
-class LangFuseSettings(BaseSettings):
-    langfuse_public_key: str
-    langfuse_secret_key: str
-    langfuse_host: str
-    
-    model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
-    )
-    
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        if not self.langfuse_public_key or not self.langfuse_secret_key or not self.langfuse_host:
-            raise ValueError("LangFuse settings (LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST) are required")
-
-
 class AlibabaSettings(BaseSettings):
     base_alibaba_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     alibaba_key: str
@@ -86,7 +70,6 @@ class Settings(BaseModel):
     supabase: SupabaseSettings = SupabaseSettings()
     openrouter: OpenRouterSettings = OpenRouterSettings()
     alibaba: AlibabaSettings = AlibabaSettings()
-    langfuse: LangFuseSettings = LangFuseSettings()
     whatsapp: WhatsAppSettings = WhatsAppSettings()
 
 
