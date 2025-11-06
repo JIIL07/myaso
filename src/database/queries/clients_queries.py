@@ -1,7 +1,7 @@
 """SQL запросы для работы с клиентами."""
 
 from typing import Dict, Any, Optional
-from src.utils.supabase_client import get_supabase_client
+from src.utils import get_supabase_client
 
 
 async def get_client_by_phone(phone: str) -> Optional[Dict[str, Any]]:

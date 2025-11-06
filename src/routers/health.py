@@ -3,7 +3,7 @@
 import logging
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from src.utils.supabase_client import get_supabase_client
+from src.utils import get_supabase_client
 from src.config.settings import settings
 from langfuse import Langfuse
 import httpx

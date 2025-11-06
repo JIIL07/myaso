@@ -13,7 +13,7 @@ from src.utils import remove_markdown_symbols
 from src.utils.memory import SupabaseConversationMemory
 from src.utils.phone_validator import normalize_phone, validate_phone
 from src.config.settings import settings
-from src.utils.supabase_client import get_supabase_client
+from src.utils import get_supabase_client
 from src.services.whatsapp_service import send_message
 from supabase import AClient
 

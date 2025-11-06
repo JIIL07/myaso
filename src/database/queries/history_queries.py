@@ -1,7 +1,7 @@
 """SQL запросы для работы с историей диалогов."""
 
 from typing import List, Dict, Any
-from src.utils.supabase_client import get_supabase_client
+from src.utils import get_supabase_client
 
 
 async def get_conversation_history_count(phone: str) -> int:

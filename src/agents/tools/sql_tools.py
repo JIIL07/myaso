@@ -20,7 +20,7 @@ from src.config.constants import (
 from src.utils.prompts import get_prompt
 from src.utils import validate_sql_conditions
 from src.database.queries.products_queries import get_products_by_sql_conditions
-from src.utils.async_mixin import records_to_json
+from src.utils import records_to_json
 
 logger = logging.getLogger(__name__)
 langchain_settings = LangChainSettings()

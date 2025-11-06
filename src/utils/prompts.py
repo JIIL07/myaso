@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional, Dict, Any
 import logging
 
-from src.utils.supabase_client import get_supabase_client
+from src.utils import get_supabase_client
 
 logger = logging.getLogger(__name__)
 

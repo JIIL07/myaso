@@ -3,7 +3,7 @@
 from typing import List, Dict, Any
 import asyncpg
 from src.database import get_pool
-from src.utils.async_mixin import records_to_json
+from src.utils import records_to_json
 
 
 async def get_random_products(limit: int = 10) -> List[Dict[str, Any]]:

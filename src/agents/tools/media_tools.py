@@ -9,7 +9,7 @@ from langchain_core.tools import tool
 
 from src.config.settings import settings
 from src.config.constants import HTTP_TIMEOUT_SECONDS
-from src.utils.supabase_client import get_supabase_client
+from src.utils import get_supabase_client
 
 logger = logging.getLogger(__name__)
 

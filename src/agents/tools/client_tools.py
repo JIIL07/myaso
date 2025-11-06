@@ -6,7 +6,7 @@ import logging
 from langchain_core.tools import tool
 
 from src.database.queries.clients_queries import get_client_profile_text
-from src.database.queries.orders_queries import get_client_orders as get_client_orders_db
+from src.database.queries.orders_queries import get_client_orders as get_client_orders_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ async def get_client_orders(phone: str) -> str:
         Строка с отформатированным списком заказов или сообщение об отсутствии заказов
     """
     try:
-        orders = await get_client_orders_db(phone)
+        orders = await get_client_orders_from_db(phone)
 
         if not orders:
             return "Заказы не найдены."
