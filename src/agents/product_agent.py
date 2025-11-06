@@ -29,9 +29,9 @@ from src.config.constants import (
     MAX_AGENT_ITERATIONS,
     MAX_AGENT_EXECUTION_TIME,
 )
-from src.utils.langfuse_handler import LangfuseHandler
+from src.utils.callbacks.langfuse_handler import LangfuseHandler
 from .base_agent import BaseAgent
-from agents.tools import (
+from .tools import (
     vector_search,
     show_product_photos,
     get_client_profile,

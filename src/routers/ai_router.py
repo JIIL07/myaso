@@ -1,24 +1,21 @@
 from fastapi import APIRouter, BackgroundTasks
-from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import logging
 from datetime import datetime, timedelta
-from src.schemas import (
+from src.models import (
     UserMessageRequest,
     InitConverastionRequest,
     ResetConversationRequest,
+    ClientProfileResponse,
 )
-from src.config.constants import (
-    HTTP_TIMEOUT_SECONDS,
-)
-from agents.factory import AgentFactory
+from src.agents.factory import AgentFactory
 from src.utils import remove_markdown_symbols
-from src.utils.langchain_memory import SupabaseConversationMemory
+from src.utils.memory import SupabaseConversationMemory
 from src.utils.phone_validator import normalize_phone, validate_phone
 from src.config.settings import settings
 from src.utils.supabase_client import get_supabase_client
+from src.services.whatsapp_service import send_message
 from supabase import AClient
-import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +44,10 @@ async def process_conversation_background(request: UserMessageRequest):
 
 
         try:
-            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-                await client.post(
-                    settings.whatsapp.send_message_url,
-                    json={
-                        "recipient": request.client_phone,
-                        "message": remove_markdown_symbols(response_text),
-                    },
-                )
+            await send_message(
+                request.client_phone,
+                remove_markdown_symbols(response_text),
+            )
         except Exception as e:
             logger.error(f"ОШИБКА: Ошибка отправки в WhatsApp для {request.client_phone}: {e}")
 
@@ -66,14 +59,10 @@ async def process_conversation_background(request: UserMessageRequest):
             exc_info=True,
         )
         try:
-            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-                await client.post(
-                    settings.whatsapp.send_message_url,
-                    json={
-                        "recipient": request.client_phone,
-                        "message": "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
-                    },
-                )
+            await send_message(
+                request.client_phone,
+                "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
+            )
         except Exception:
             pass
 
@@ -136,15 +125,10 @@ async def init_conversation_background(request: InitConverastionRequest):
         )
 
         try:
-            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-                response = await client.post(
-                    settings.whatsapp.send_message_url,
-                    json={
-                        "recipient": request.client_phone,
-                        "message": remove_markdown_symbols(response_text),
-                    },
-                )
-                response.raise_for_status()
+            await send_message(
+                request.client_phone,
+                remove_markdown_symbols(response_text),
+            )
         except Exception as send_error:
             logger.error(
                 f"[initConversation] Ошибка отправки сообщения в WhatsApp для {request.client_phone}: {send_error}",
@@ -161,14 +145,10 @@ async def init_conversation_background(request: InitConverastionRequest):
             exc_info=True,
         )
         try:
-            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-                await client.post(
-                    settings.whatsapp.send_message_url,
-                    json={
-                        "recipient": request.client_phone,
-                        "message": "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
-                    },
-                )
+            await send_message(
+                request.client_phone,
+                "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
+            )
         except Exception as send_error:
             logger.error(
                 f"[initConversation] Ошибка отправки сообщения об ошибке: {send_error}"
@@ -202,16 +182,6 @@ async def init_conversation(
     return {"success": True}
 
 
-class ClientProfileResponse(BaseModel):
-    """Модель ответа с профилем клиента."""
-
-    client_phone: str
-    profile: str
-    message_count: int
-    last_order: Optional[Dict[str, Any]] = None
-    status: str
-
-
 @router.get("/getProfile", response_model=ClientProfileResponse, status_code=200)
 async def get_profile(client_phone: str):
     """Получает профиль клиента по номеру телефона.
@@ -225,7 +195,7 @@ async def get_profile(client_phone: str):
     client_phone = normalize_phone(client_phone)
 
     try:
-        from agents.tools import get_client_profile
+        from src.agents.tools import get_client_profile
         profile_text = await get_client_profile.ainvoke({"phone": client_phone})
     except Exception:
         profile_text = "Профиль клиента не найден в базе данных."

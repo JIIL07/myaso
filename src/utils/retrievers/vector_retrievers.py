@@ -11,7 +11,7 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
 from src.config.settings import settings
-from src.config.database import get_pool
+from src.database import get_pool
 from src.config.constants import (
     DEFAULT_VECTOR_SEARCH_K,
     EMBEDDING_DELAY_SECONDS,

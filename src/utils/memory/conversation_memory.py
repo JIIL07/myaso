@@ -19,7 +19,7 @@ from langchain_core.messages import (
 
 from supabase import AClient
 
-from src.utils import AsyncMixin
+from src.utils.async_mixin import AsyncMixin
 from src.utils.supabase_client import get_supabase_client
 
 

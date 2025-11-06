@@ -1,3 +1,5 @@
+"""Модели для входящих запросов."""
+
 import re
 from pydantic import BaseModel, Field, validator
 
@@ -69,3 +71,4 @@ class ResetConversationRequest(BaseModel):
         if not v or not v.strip():
             raise ValueError("Номер телефона не может быть пустым")
         return v.strip()
+
