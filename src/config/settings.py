@@ -6,7 +6,7 @@
 from pydantic import BaseModel
 from .llm_config import OpenRouterSettings, AlibabaSettings
 from .database_config import SupabaseSettings
-from .langfuse_config import LangFuseSettings
+from .langfuse_config import LangFuseConfig
 from .whatsapp_config import WhatsAppSettings
 
 
@@ -17,7 +17,7 @@ class Settings(BaseModel):
     openrouter: OpenRouterSettings = OpenRouterSettings()
     alibaba: AlibabaSettings = AlibabaSettings()
     whatsapp: WhatsAppSettings = WhatsAppSettings()
-    langfuse: LangFuseSettings = LangFuseSettings()
+    langfuse: LangFuseConfig = LangFuseConfig()
 
 
 settings = Settings()

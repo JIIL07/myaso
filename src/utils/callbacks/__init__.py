@@ -1,6 +1,6 @@
-"""LangChain callbacks."""
+"""Callbacks для LangChain."""
 
-from .langfuse_handler import LangfuseHandler
+from .langfuse_callback import LangfuseHandler
 
 __all__ = ["LangfuseHandler"]
 

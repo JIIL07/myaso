@@ -24,6 +24,7 @@ services:
       - WHATSAPP_API_BASE_URL=${WHATSAPP_API_BASE_URL:-http://51.250.42.45:2026}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-json}
+      - PYTHONUNBUFFERED=1
     env_file:
       - .env
     volumes:

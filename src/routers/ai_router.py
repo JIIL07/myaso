@@ -84,7 +84,7 @@ async def process_conversation(
     """
     normalized_phone = normalize_phone(request.client_phone)
     if not validate_phone(normalized_phone):
-        logger.warning(
+        logger.error(
             f"[processConversation] Невалидный номер телефона: {request.client_phone}"
         )
         return {"success": False, "error": "Invalid phone number"}
@@ -112,7 +112,8 @@ async def init_conversation_background(request: InitConverastionRequest):
 Тема диалога: {request.topic}
 Для формирования приветствия:
 1. Получи профиль клиента (номер телефона: {request.client_phone})
-2. Получи товары по теме диалога "{request.topic}" используя подходящие инструменты
+2. Получи товары по теме диалога "{request.topic}" используя generate_sql_from_text + execute_sql_request (text2sql инструменты)
+   ВАЖНО: Это init_conversation, поэтому предпочтительно использовать text2sql инструменты для поиска товаров
 3. Если есть товары с фотографиями, отправь их клиенту
 Поприветствуй дружелюбно со смайликами, будь позитивным и энергичным. Предложи помощь и ненавязчиво уточни запрос."""
 
@@ -172,7 +173,7 @@ async def init_conversation(
     """
     normalized_phone = normalize_phone(request.client_phone)
     if not validate_phone(normalized_phone):
-        logger.warning(
+        logger.error(
             f"[initConversation] Невалидный номер телефона: {request.client_phone}"
         )
         return {"success": False, "error": "Invalid phone number"}
@@ -281,112 +282,12 @@ async def reset_conversation(
     """
     normalized_phone = normalize_phone(request.client_phone)
     if not validate_phone(normalized_phone):
-        logger.warning(
+        logger.error(
             f"[resetConversation] Невалидный номер телефона: {request.client_phone}"
         )
         return {"success": False, "error": "Invalid phone number"}
 
+
     request.client_phone = normalized_phone
     background_tasks.add_task(reset_conversation_background, request)
     return {"success": True}
-
-
-@router.get("/conversation-history/{phone}")
-async def get_conversation_history(phone: str, days: int = 7):
-    """
-    Get conversation history from LangFuse for a specific phone number
-
-    Args:
-        phone: Phone number of the client
-        days: Number of days to look back (default: 7)
-
-    Returns:
-        Dictionary with conversation history
-    """
-    normalized_phone = normalize_phone(phone)
-    if not validate_phone(normalized_phone):
-        logger.warning(f"[get_conversation_history] Невалидный номер телефона: {phone}")
-        return {
-            "phone": phone,
-            "error": "Invalid phone number",
-            "total_conversations": 0,
-            "history": [],
-        }
-
-    try:
-        from langfuse import Langfuse
-
-        langfuse = Langfuse(
-            public_key=settings.langfuse.langfuse_public_key,
-            secret_key=settings.langfuse.langfuse_secret_key,
-            host=settings.langfuse.langfuse_host,
-        )
-
-        from_timestamp = datetime.now() - timedelta(days=days)
-
-        history = []
-        try:
-            if hasattr(langfuse, "client") and hasattr(langfuse.client, "traces"):
-                try:
-                    response = langfuse.client.traces.list(
-                        user_id=normalized_phone,
-                        from_timestamp=(
-                            from_timestamp.isoformat() if from_timestamp else None
-                        ),
-                        limit=100,
-                    )
-
-                    if hasattr(response, "data") and response.data:
-                        for trace in response.data:
-                            trace_dict = (
-                                trace if isinstance(trace, dict) else trace.__dict__
-                            )
-                            history.append(
-                                {
-                                    "trace_id": trace_dict.get("id"),
-                                    "timestamp": trace_dict.get("timestamp"),
-                                    "input": trace_dict.get("input", {}),
-                                    "output": trace_dict.get("output", {}),
-                                    "metadata": trace_dict.get("metadata", {}),
-                                    "tools_used": trace_dict.get("metadata", {}).get(
-                                        "tools_used", []
-                                    ),
-                                }
-                            )
-                except AttributeError:
-                    logger.warning(f"LangFuse API structure differs from expected")
-            else:
-                logger.warning(f"LangFuse client does not have expected API structure")
-
-        except Exception as api_error:
-            logger.warning(
-                f"Failed to fetch traces using LangFuse API: {api_error}. "
-                f"Please check LangFuse dashboard directly for user_id: {normalized_phone}"
-            )
-            return {
-                "phone": normalized_phone,
-                "error": f"Could not fetch traces from API: {str(api_error)}",
-                "message": f"Please check LangFuse dashboard for user_id: {normalized_phone}",
-                "total_conversations": 0,
-                "history": [],
-            }
-
-
-        return {
-            "phone": normalized_phone,
-            "total_conversations": len(history),
-            "days": days,
-            "history": history,
-        }
-
-    except Exception as e:
-        logger.error(
-            f"[get_conversation_history] Ошибка получения истории для {normalized_phone}: {e}",
-            exc_info=True,
-        )
-        return {
-            "phone": normalized_phone,
-            "error": str(e),
-            "total_conversations": 0,
-            "history": [],
-        }

@@ -36,7 +36,6 @@ async def get_supabase_client() -> AClient:
                 settings.supabase.supabase_service_key,
                 options=AsyncClientOptions(schema="myaso"),
             )
-            logger.info("Supabase async клиент создан успешно")
         except Exception as e:
             logger.error(f"Ошибка при создании Supabase клиента: {e}", exc_info=True)
             raise RuntimeError(f"Не удалось создать Supabase клиент: {e}") from e
@@ -54,5 +53,4 @@ async def close_supabase_client() -> None:
 
     if _supabase_client is not None:
         _supabase_client = None
-        logger.info("Supabase клиент закрыт")
 

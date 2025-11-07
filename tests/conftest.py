@@ -32,25 +32,28 @@ mock_utils_package.prompts.get_prompt = AsyncMock(return_value=None)
 mock_utils_package.prompts.get_all_system_values = AsyncMock(return_value={})
 mock_utils_package.prompts.build_prompt_with_context = MagicMock()
 
-def create_mock_langfuse_handler(*args, **kwargs):
-    """Создает мок-экземпляр LangfuseHandler с нужными атрибутами."""
+def create_mock_langfuse_callback_handler(*args, **kwargs):
+    """Создает мок-экземпляр LangFuseCallbackHandler с нужными атрибутами."""
     mock_instance = MagicMock()
     mock_instance.used_tools = set()
     mock_instance.tool_calls = []
     mock_instance.save_conversation_to_langfuse = MagicMock()
+    mock_instance.session_id = "test_session"
+    mock_instance._trace_id = None
+    mock_instance._langfuse_handler = None
     return mock_instance
 
-mock_langfuse_handler_class = MagicMock()
-mock_langfuse_handler_class.LangfuseHandler = MagicMock(side_effect=create_mock_langfuse_handler)
+mock_langfuse_callback_module = MagicMock()
+mock_langfuse_callback_module.LangFuseCallbackHandler = MagicMock(side_effect=create_mock_langfuse_callback_handler)
 mock_utils_package.callbacks = MagicMock()
-mock_utils_package.callbacks.langfuse_handler = mock_langfuse_handler_class
+mock_utils_package.callbacks.langfuse_callback = mock_langfuse_callback_module
 
 if "src.utils" not in sys.modules:
     sys.modules["src.utils"] = mock_utils_package
 sys.modules["src.utils.retrievers"] = mock_utils_package.retrievers
 sys.modules["src.utils.prompts"] = mock_utils_package.prompts
 sys.modules["src.utils.callbacks"] = mock_utils_package.callbacks
-sys.modules["src.utils.callbacks.langfuse_handler"] = mock_utils_package.callbacks.langfuse_handler
+sys.modules["src.utils.callbacks.langfuse_callback"] = mock_langfuse_callback_module
 
 test_env = {
     "SUPABASE_URL": "http://localhost:54321",

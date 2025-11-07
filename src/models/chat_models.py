@@ -31,7 +31,6 @@ class LangFuseTraceResponse(BaseModel):
     input: Dict[str, Any] = {}
     output: Dict[str, Any] = {}
     metadata: Dict[str, Any] = {}
-    tools_used: List[str] = []
 
 
 class ConversationHistoryResponse(BaseModel):

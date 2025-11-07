@@ -5,7 +5,6 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from src.utils import get_supabase_client
 from src.config.settings import settings
-from langfuse import Langfuse
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -25,29 +24,6 @@ async def check_database() -> str:
         return "ok"
     except Exception as e:
         logging.warning(f"Database health check failed: {e}")
-        return "error"
-
-
-async def check_langfuse() -> str:
-    """Проверяет подключение к LangFuse.
-
-    Returns:
-        "ok" если подключение успешно, иначе "error"
-    """
-    try:
-        if not settings.langfuse.langfuse_public_key or not settings.langfuse.langfuse_secret_key:
-            return "not_configured"
-
-        langfuse = Langfuse(
-            public_key=settings.langfuse.langfuse_public_key,
-            secret_key=settings.langfuse.langfuse_secret_key,
-            host=settings.langfuse.langfuse_host,
-        )
-        if hasattr(langfuse, "client") and hasattr(langfuse.client, "traces"):
-            langfuse.client.traces.list(limit=1)
-        return "ok"
-    except Exception as e:
-        logging.warning(f"LangFuse health check failed: {e}")
         return "error"
 
 
@@ -82,7 +58,6 @@ async def health_check():
     checks = {
         "status": "healthy",
         "database": await check_database(),
-        "langfuse": await check_langfuse(),
         "whatsapp_api": await check_whatsapp_api(),
     }
 

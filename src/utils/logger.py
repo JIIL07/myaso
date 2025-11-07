@@ -50,13 +50,35 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
             return super().format(record)
 
 
+_logging_setup_done = False
+
+
 def setup_logging():
-    """Setup logging for Docker container"""
+    """Setup logging for Docker container.
+
+    Вызывается один раз при старте приложения.
+    Очищает все существующие handlers перед добавлением новых.
+    """
+    global _logging_setup_done
+
+    if _logging_setup_done:
+        return
 
     import os
 
     log_format = os.getenv("LOG_FORMAT", "json")
     log_level = os.getenv("LOG_LEVEL", "INFO")
+
+    root_logger = logging.getLogger()
+
+    root_logger.handlers.clear()
+
+    for logger_name in logging.Logger.manager.loggerDict:
+        logger_obj = logging.getLogger(logger_name)
+        if hasattr(logger_obj, 'handlers'):
+            logger_obj.handlers.clear()
+        if hasattr(logger_obj, 'propagate'):
+            logger_obj.propagate = True
 
     console_handler = logging.StreamHandler()
 
@@ -70,12 +92,14 @@ def setup_logging():
 
     console_handler.setFormatter(formatter)
 
-    root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-
-    root_logger.handlers.clear()
     root_logger.addHandler(console_handler)
 
     logging.getLogger("agents.tools").setLevel(logging.INFO)
-    logging.getLogger("utils.langfuse_handler").setLevel(logging.INFO)
+    logging.getLogger("utils.callbacks.langfuse_callback").setLevel(logging.INFO)
     logging.getLogger("agents.product_agent").setLevel(logging.INFO)
+
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    _logging_setup_done = True

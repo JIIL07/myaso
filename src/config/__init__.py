@@ -5,7 +5,7 @@ from .constants import *
 from .langchain_settings import LangChainSettings
 from .llm_config import OpenRouterSettings, AlibabaSettings
 from .database_config import SupabaseSettings
-from .langfuse_config import LangFuseSettings
+from .langfuse_config import LangFuseConfig
 from .whatsapp_config import WhatsAppSettings
 
 __all__ = [
@@ -17,7 +17,7 @@ __all__ = [
     "OpenRouterSettings",
     "AlibabaSettings",
     "SupabaseSettings",
-    "LangFuseSettings",
+    "LangFuseConfig",
     "WhatsAppSettings",
 ]
 

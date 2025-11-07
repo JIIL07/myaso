@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Iterable, List, Sequence
 
 from langchain_core.chat_history import BaseChatMessageHistory
@@ -20,6 +21,8 @@ from langchain_core.messages import (
 from supabase import AClient
 
 from src.utils import AsyncMixin, get_supabase_client
+
+logger = logging.getLogger(__name__)
 
 
 _ROLE_TO_LC: Dict[str, type[BaseMessage]] = {
@@ -56,18 +59,28 @@ class SupabaseConversationMemory(AsyncMixin, BaseChatMessageHistory):
     """Память диалога на Supabase."""
 
     def __init__(self, client_phone: str) -> None:
-        super().__init__()
+        super().__init__(client_phone)
         self.client_phone = client_phone
         self.supabase: AClient | None = None
 
-    async def __ainit__(self) -> None:
+    async def __ainit__(self, client_phone: str) -> None:
+        """Асинхронная инициализация памяти.
+
+        Args:
+            client_phone: Номер телефона клиента
+        """
+        self.client_phone = client_phone
         self.supabase = await get_supabase_client()
+        logger.info(f"[SupabaseConversationMemory] Инициализирована память для {client_phone}")
 
     async def add_messages(self, messages: Sequence[BaseMessage]) -> None:
         """Добавляет список сообщений в историю."""
         if not messages:
             return
-        assert self.supabase is not None, "Supabase client is not initialized"
+
+        if self.supabase is None:
+            logger.error(f"[SupabaseConversationMemory.add_messages] Supabase client не инициализирован для {self.client_phone}")
+            raise RuntimeError("Supabase client is not initialized. Make sure to await the memory object after creation.")
 
         rows: List[Dict[str, Any]] = []
         for m in messages:
@@ -78,7 +91,14 @@ class SupabaseConversationMemory(AsyncMixin, BaseChatMessageHistory):
                     "message": m.content,
                 }
             )
-        await self.supabase.table("conversation_history").insert(rows).execute()
+
+        try:
+            logger.info(f"[SupabaseConversationMemory.add_messages] Сохранение {len(rows)} сообщений для {self.client_phone}")
+            result = await self.supabase.table("conversation_history").insert(rows).execute()
+            logger.info(f"[SupabaseConversationMemory.add_messages] Успешно сохранено {len(rows)} сообщений для {self.client_phone}")
+        except Exception as e:
+            logger.error(f"[SupabaseConversationMemory.add_messages] Ошибка при сохранении сообщений для {self.client_phone}: {e}", exc_info=True)
+            raise
 
     async def clear(self) -> None:
         """Удаляет историю для указанного `client_phone`."""
