@@ -92,6 +92,7 @@ def create_media_tools(client_phone: str, is_init_message: bool = False):
         2. Получи ID из ответа: [PRODUCT_IDS]{{"product_ids": [789, 790]}}[/PRODUCT_IDS]
         3. ПОТОМ отправь фото: show_product_photos product_ids=[789, 790]
         4. НЕ используй ID из старых запросов!
+        5. ВАЖНО: При обычных запросах отправляется только 1 фото (первый товар из списка)
 
         СЦЕНАРИЙ 2: Клиент просто просит "отправь фото" (без уточнения)
         Пример: После поиска "есть коралл" → клиент: "отправь фото"
@@ -100,21 +101,6 @@ def create_media_tools(client_phone: str, is_init_message: bool = False):
         1. Используй ID из ПОСЛЕДНЕГО ответа инструментов поиска в chat_history
         2. Извлеки product_ids из секции [PRODUCT_IDS] из последнего ответа
         3. show_product_photos product_ids=[извлеченные ID]
-
-        ════════════════════════════════════════════════════════════════════════════════
-        ПРИМЕРЫ:
-        ════════════════════════════════════════════════════════════════════════════════
-
-        ✅ ПРАВИЛЬНО (конкретный запрос):
-        Клиент: "покажи фото грудинки свиной"
-        1. vector_search("грудинка свиная")
-        2. Получи: [PRODUCT_IDS]{{"product_ids": [789, 790]}}[/PRODUCT_IDS]
-        3. show_product_photos product_ids=[789, 790]
-
-        ✅ ПРАВИЛЬНО (простой запрос):
-        Клиент: "есть коралл" → vector_search → [PRODUCT_IDS]{{"product_ids": [123, 456]}}[/PRODUCT_IDS]
-        Клиент: "отправь фото"
-        show_product_photos product_ids=[123, 456]
 
         Args:
             product_ids: Список ID товаров для отправки фото (извлеки из секции [PRODUCT_IDS] ответа инструментов поиска)
@@ -130,6 +116,9 @@ def create_media_tools(client_phone: str, is_init_message: bool = False):
         if is_init_message:
             product_ids = product_ids[:2]
             logger.info(f"[show_product_photos] Init conversation: ограничено до 2 товаров")
+        else:
+            product_ids = product_ids[:1]
+            logger.info(f"[show_product_photos] Обычный запрос: ограничено до 1 товара")
 
         has_photo = []
         no_photo = []

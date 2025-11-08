@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional, Dict
 import json
 import logging
 from langchain_core.tools import tool
@@ -10,6 +10,7 @@ from langchain_core.tools import tool
 from src.config.constants import VECTOR_SEARCH_LIMIT
 from src.utils.retrievers import SupabaseVectorRetriever
 from src.database.queries.products_queries import get_random_products as get_random_products_db
+from src.utils.prompts import get_all_system_values
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +33,6 @@ async def vector_search(query: str) -> str:
     - Поиск по региону: "мясо из Сибири", "товары из Бурятии", "регион Алтай"
     - Комбинации текстовых критериев: "свинина охлажденная", "стейки от Коралл"
     - Запросы БЕЗ числовых условий (цена, вес, скидка с числами)
-
-    ❌ НЕ используй для:
-    - Числовые условия: "цена меньше 100", "дешевле 80 рублей" → используй generate_sql_from_text
-    - Условия по весу: "вес больше 5 кг", "минимальный заказ меньше 10" → используй generate_sql_from_text
-    - Условия по скидке: "скидка больше 15%" → используй generate_sql_from_text
-    - Пустые запросы или init_conversation → используй generate_sql_from_text
-    - Подтверждения: "Да", "Нет", "Ок"
-    - Сервисные темы: доставка, оплата, расписание
 
     ════════════════════════════════════════════════════════════════════════════════
     ФОРМАТ ОТВЕТА:
@@ -179,46 +172,3 @@ async def get_random_products(limit: int = 10) -> str:
     except Exception as e:
         logger.error(f"Ошибка при получении случайных товаров: {e}")
         return f"Ошибка при получении товаров: {str(e)}"
-
-
-def calculate_final_price(order_price_kg: float, system_vars: dict) -> float:
-    """Рассчитывает финальную цену на основе order_price_kg и системных переменных.
-
-    Args:
-        order_price_kg: Цена за кг из БД
-        system_vars: Словарь системных переменных
-
-    Returns:
-        Финальная цена за кг
-    """
-    if not system_vars:
-        return order_price_kg
-
-    try:
-        price = float(order_price_kg)
-        
-        # Ищем наценку для цен < 100
-        markup_key = None
-        for key in system_vars.keys():
-            if "наценка" in key.lower() and ("<100" in key or "меньше 100" in key.lower()):
-                markup_key = key
-                break
-        
-        # Ищем коэффициент для цен >= 100
-        coefficient_key = None
-        for key in system_vars.keys():
-            if ("коэффициент" in key.lower() or ">100" in key or "больше 100" in key.lower()):
-                coefficient_key = key
-                break
-
-        if price < 100 and markup_key:
-            markup = float(system_vars[markup_key])
-            return price + markup
-        elif price >= 100 and coefficient_key:
-            coefficient = float(system_vars[coefficient_key])
-            return price * coefficient + price
-        
-        return price
-    except (ValueError, KeyError) as e:
-        logger.warning(f"Ошибка расчета финальной цены: {e}, возвращаем order_price_kg")
-        return order_price_kg

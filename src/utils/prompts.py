@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Optional, Dict, Any
 import logging
+import re
 
 from src.utils import get_supabase_client
 
@@ -107,6 +108,44 @@ def format_system_variables(system_vars: Dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def escape_prompt_variables(prompt: str) -> str:
+    """Экранирует переменные в промпте, которые не являются шаблонными переменными LangChain.
+
+    LangChain ChatPromptTemplate ожидает только определенные переменные:
+    - input
+    - chat_history
+    - agent_scratchpad
+    - intermediate_steps
+
+    Все остальные фигурные скобки должны быть экранированы двойными скобками,
+    чтобы они трактовались как буквальный текст, а не как переменные шаблона.
+
+    Args:
+        prompt: Текст промпта, который может содержать переменные в фигурных скобках
+
+    Returns:
+        Промпт с экранированными переменными (кроме известных шаблонных переменных)
+    """
+    known_variables = {
+        "input",
+        "chat_history",
+        "agent_scratchpad",
+        "intermediate_steps",
+    }
+
+    pattern = r"(?<!\{)\{([^}]+)\}(?!\})"
+
+    def replace_var(match):
+        var_name = match.group(1).strip()
+        if var_name in known_variables:
+            return match.group(0)
+        return f"{{{{{var_name}}}}}"
+
+    escaped_prompt = re.sub(pattern, replace_var, prompt)
+
+    return escaped_prompt
+
+
 def build_prompt_with_context(
     base_prompt: str,
     client_info: Optional[str] = None,
@@ -129,7 +168,7 @@ def build_prompt_with_context(
         system_vars: Словарь системных переменных (опционально, если None - показывается "No system variables available")
 
     Returns:
-        Полный промпт с контекстом
+        Полный промпт с контекстом (с экранированными переменными)
     """
     separator = "=" * 100
 
@@ -153,4 +192,8 @@ def build_prompt_with_context(
 
     parts.append(base_prompt)
 
-    return "".join(parts)
+    full_prompt = "".join(parts)
+    
+    escaped_prompt = escape_prompt_variables(full_prompt)
+
+    return escaped_prompt

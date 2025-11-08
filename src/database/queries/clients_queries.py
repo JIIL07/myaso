@@ -60,3 +60,20 @@ async def get_client_profile_text(phone: str) -> str:
         else "Профиль найден, но данные отсутствуют."
     )
 
+
+async def get_client_is_friend(phone: str) -> bool:
+    """Получает флаг дружбы клиента.
+
+    Args:
+        phone: Номер телефона клиента
+
+    Returns:
+        True если клиент является другом (it_is_friend=TRUE), False в противном случае
+    """
+    profile = await get_client_by_phone(phone)
+    if not profile:
+        return False
+    
+    is_friend = profile.get("is_it_friend")
+    return bool(is_friend)
+

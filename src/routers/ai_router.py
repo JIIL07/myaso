@@ -31,6 +31,7 @@ async def process_conversation_background(request: UserMessageRequest):
 
     try:
         memory = await SupabaseConversationMemory(request.client_phone)
+        logger.info(f"[processConversation] Память создана для {request.client_phone}, async_initialized={getattr(memory, 'async_initialized', False)}")
 
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
@@ -103,6 +104,11 @@ async def init_conversation_background(request: InitConverastionRequest):
 
     try:
         memory = await SupabaseConversationMemory(request.client_phone)
+        
+        if not hasattr(memory, 'async_initialized') or not memory.async_initialized:
+            logger.warning(f"[initConversation] Память не инициализирована для {request.client_phone}, инициализируем...")
+            await memory.__ainit__(request.client_phone)
+        
         await memory.clear()
 
         factory = AgentFactory.instance()
@@ -112,10 +118,13 @@ async def init_conversation_background(request: InitConverastionRequest):
 Тема диалога: {request.topic}
 Для формирования приветствия:
 1. Получи профиль клиента (номер телефона: {request.client_phone})
+   ВАЖНО: Проверь статус дружбы клиента (it_is_friend) в профиле. Если it_is_friend=TRUE - обращайся на "ты", если FALSE - на "вы"
 2. Получи товары по теме диалога "{request.topic}" используя generate_sql_from_text + execute_sql_request (text2sql инструменты)
-   ВАЖНО: Это init_conversation, поэтому предпочтительно использовать text2sql инструменты для поиска товаров
-3. Если есть товары с фотографиями, отправь их клиенту
-Поприветствуй дружелюбно со смайликами, будь позитивным и энергичным. Предложи помощь и ненавязчиво уточни запрос."""
+   ВАЖНО: Это init_conversation, поэтому предпочтительно использовать generate_sql_from_text инструменты для поиска товаров
+3. Если есть товары с фотографиями, отправь их клиенту (максимум 2 фото, так как is_init_message=True)
+Поприветствуй дружелюбно со смайликами, будь позитивным и энергичным. 
+ВАЖНО: Твоя главная задача - заинтересовать клиента в покупке ОПТОВОЙ ПАРТИИ продукции. 
+Упомяни преимущества оптовых закупок и предложи помощь в подборе товаров для оптовой покупки."""
 
         response_text = await agent.run(
             user_input=welcome_input,

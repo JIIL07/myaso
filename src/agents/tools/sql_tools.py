@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Dict
 import json
 import logging
 import asyncio
@@ -17,20 +17,14 @@ from src.config.constants import (
     DANGEROUS_SQL_KEYWORDS,
     MAX_SQL_RETRY_ATTEMPTS,
 )
-from src.utils.prompts import get_prompt
+from src.utils.prompts import get_prompt, escape_prompt_variables, get_all_system_values
 from src.utils import validate_sql_conditions
 from src.database.queries.products_queries import get_products_by_sql_conditions
-from src.utils import records_to_json
 
 logger = logging.getLogger(__name__)
 
 
 def get_products_table_schema() -> str:
-    """Get exact products table schema for SQL generation.
-
-    Returns:
-        Строка с точной схемой таблицы products для использования в SQL генерации
-    """
     return """
 TABLE: products
 
@@ -52,76 +46,19 @@ COLUMNS:
 - cooled_or_frozen (text) - охлажденный/замороженный
 - product_in_package (text) - продукт в упаковке
 - embedding (vector) - НЕ ИСПОЛЬЗУЙ в WHERE!
-
-ПРАВИЛА:
-1. Цена: order_price_kg < 100
-2. Регион: from_region = 'Бурятия'
-3. Минимальный заказ: min_order_weight_kg < 10
-4. Тип: cooled_or_frozen = 'охлажденное'
-5. Поставщик: supplier_name LIKE '%Мироторг%'
-6. С фото: photo IS NOT NULL AND photo != ''
-
-ПРИМЕРЫ:
-"дешевле 100" → order_price_kg < 100
-"из Бурятии" → from_region = 'Бурятия'
-"минимальный заказ меньше 15" → min_order_weight_kg < 15
 """
 
 
-@tool
-async def generate_sql_from_text(
+async def _generate_sql_from_text_impl(
     text_conditions: str,
     topic: Optional[str] = None,
+    is_init_message: bool = False,
 ) -> str:
     """Генерирует SQL WHERE условия из текстового описания на русском языке.
 
     Преобразует текстовые условия в SQL WHERE условия для поиска товаров.
     Использует LLM для понимания запроса и генерации правильного SQL.
     Имеет встроенный retry механизм (3 попытки с exponential backoff).
-
-    ════════════════════════════════════════════════════════════════════════════════
-    КОГДА ИСПОЛЬЗОВАТЬ:
-    ════════════════════════════════════════════════════════════════════════════════
-
-    ✅ ОБЯЗАТЕЛЬНО используй для:
-    - Числовые условия по ЦЕНЕ: "цена меньше 80", "дешевле 100 рублей", "цена от 50 до 200"
-    - Числовые условия по ВЕСУ: "вес больше 5 кг", "минимальный заказ меньше 10"
-    - Числовые условия по СКИДКЕ: "скидка больше 15%", "скидка от 10 до 20"
-    - Комбинации числовых условий: "цена меньше 100 и скидка больше 10%"
-    - Пустые запросы или init_conversation → передай описание темы/категории в text_conditions
-
-    ❌ НЕ используй для:
-    - Только название поставщика БЕЗ чисел: "товары от Мироторг" → используй vector_search
-    - Только название региона БЕЗ чисел: "мясо из Сибири" → используй vector_search
-    - Только текстовые критерии БЕЗ чисел: "говядина", "стейки" → используй vector_search
-
-    ════════════════════════════════════════════════════════════════════════════════
-    ВАЖНО - ПОСЛЕ ИСПОЛЬЗОВАНИЯ:
-    ════════════════════════════════════════════════════════════════════════════════
-
-    После вызова generate_sql_from_text ОБЯЗАТЕЛЬНО вызови execute_sql_request с полученными SQL условиями!
-
-    Алгоритм работы:
-    1. generate_sql_from_text("цена меньше 100") → получаешь SQL условия
-    2. execute_sql_request(sql_conditions) → получаешь товары
-
-    ════════════════════════════════════════════════════════════════════════════════
-    КРИТИЧЕСКИ ВАЖНО - ЗАПРЕТ НА СЛОВА-ДЕЙСТВИЯ:
-    ════════════════════════════════════════════════════════════════════════════════
-
-    ⚠️ НИКОГДА не используй слова-действия (продать, купить, показать, найти, есть, 
-    отправить и т.д.) в SQL условиях для поиска по title!
-
-    Если запрос содержит ТОЛЬКО слова-действия без конкретных критериев:
-    → Верни: photo IS NOT NULL AND photo != ''
-
-    Если запрос содержит слова-действия + конкретные критерии:
-    → Игнорируй слова-действия, используй ТОЛЬКО конкретные критерии товаров
-
-    Примеры:
-    - "продать" → photo IS NOT NULL AND photo != '' (НЕ title ILIKE '%продать%'!)
-    - "продать говядину" → title ILIKE '%говядина%' AND photo IS NOT NULL AND photo != ''
-    - "есть коралл" → supplier_name = 'Коралл' AND photo IS NOT NULL AND photo != ''
 
     Args:
         text_conditions: Текстовое описание условий на русском языке
@@ -130,56 +67,60 @@ async def generate_sql_from_text(
     Returns:
         SQL WHERE условия (без ключевого слова WHERE) для использования в execute_sql_request
     """
+    is_init_conversation = is_init_message
     db_prompt = None
+    
     if topic:
         db_prompt = await get_prompt(topic)
 
-    if not db_prompt:
+    if not db_prompt and is_init_conversation:
         db_prompt = await get_prompt("Получить товары при инициализации диалога")
 
     if not db_prompt:
-        raise ValueError(
-            "Промпт 'Получить товары при инициализации диалога' не найден в БД"
-        )
+        if is_init_conversation:
+            db_prompt = await get_prompt("Получить товары при инициализации диалога")
+            if not db_prompt:
+                raise ValueError(
+                    "Промпт 'Получить товары при инициализации диалога' не найден в БД"
+                )
+        else:
+            db_prompt = ""
+    if is_init_conversation:
+        photo_instruction = """
+    КРИТИЧЕСКИ ВАЖНО - ТОВАРЫ С ФОТО:
+    ВСЕГДА добавляй условие для выбора только товаров с фотографиями: photo IS NOT NULL AND photo != ''
+    Это условие должно быть в КАЖДОМ SQL запросе!
+    Пример: order_price_kg < 100 AND photo IS NOT NULL AND photo != ''
+"""
+    else:
+        photo_instruction = """
+    КРИТИЧЕСКИ ВАЖНО - ТОВАРЫ С ФОТО:
+    НЕ добавляй автоматически условие photo IS NOT NULL!
+    Показывай ВСЕ товары, включая те, у которых нет фотографий.
+    Добавляй условие на фото ТОЛЬКО если пользователь ЯВНО просит товары с фото.
+    Пример для обычного запроса: order_price_kg < 100 (БЕЗ условия на фото)
+    Пример если пользователь просит с фото: order_price_kg < 100 AND photo IS NOT NULL AND photo != ''
+"""
 
     schema_info = f"""
     СХЕМА БАЗЫ ДАННЫХ: myaso
 
     {get_products_table_schema()}
-
-    СЦЕНАРИЙ 1: Запрос содержит ТОЛЬКО слова-действия БЕЗ конкретных критериев товаров
-    Примеры: "продать", "показать товары", "что у вас есть", "есть", "дай", "покажи"
     
-    → Верни ТОЛЬКО условие для фото: photo IS NOT NULL AND photo != ''
-    → НЕ добавляй никаких условий по title!
-    → НЕ ищи товары по словам-действиям!
-
-    СЦЕНАРИЙ 2: Запрос содержит слова-действия + конкретные критерии товаров
-    Примеры: "продать говядину", "показать стейки", "есть коралл", "найти мясо из Бурятии"
-    
-    → ПОЛНОСТЬЮ ИГНОРИРУЙ слова-действия (продать, показать, есть, найти)
-    → Используй ТОЛЬКО конкретные критерии товаров:
-      * "продать говядину" → title ILIKE '%говядина%' AND photo IS NOT NULL AND photo != ''
-      * "показать стейки" → title ILIKE '%стейки%' AND photo IS NOT NULL AND photo != ''
-      * "есть коралл" → supplier_name = 'Коралл' AND photo IS NOT NULL AND photo != ''
-      * "найти мясо из Бурятии" → from_region = 'Бурятия' AND photo IS NOT NULL AND photo != ''
-
+    КОНТЕКСТ: {"Это init_conversation (первое сообщение в диалоге)." if is_init_conversation else "Это обычный запрос в диалоге."}
+{photo_instruction}
     ПРАВИЛА ДЛЯ WHERE УСЛОВИЙ:
     1. Используй ТОЛЬКО колонки из списка выше! Никаких других колонок не существует!
     2. Используй только имена колонок БЕЗ префиксов (title, а не products.title или myaso.products.title)
-    3. Для текстовых полей используй ILIKE для поиска без учета регистра: title ILIKE '%говядина%'
-    4. Для проверки NULL используй: photo IS NOT NULL или photo IS NULL
-    5. Для булевых полей: ready_made = true или ready_made = false
-    6. Для числовых сравнений: order_price_kg < 100, discount >= 15
-    7. Для точного совпадения текста: supplier_name = 'Мироторг' или cooled_or_frozen = 'Охлаждённый'
-    8. Для дат: pricelist_date > '2024-01-01' или pricelist_date >= CURRENT_DATE
 
-    ВАЖНО - ТОВАРЫ С ФОТО:
-    ВСЕГДА добавляй условие для выбора только товаров с фотографиями: photo IS NOT NULL AND photo != ''
-    Это условие должно быть в КАЖДОМ SQL запросе, если пользователь явно не просит товары без фото.
-    Пример: order_price_kg < 100 AND photo IS NOT NULL AND photo != ''
     """
-    system_prompt = f"{db_prompt}\n\n{schema_info}"
+    
+    if db_prompt:
+        system_prompt = f"{db_prompt}\n\n{schema_info}"
+    else:
+        system_prompt = schema_info
+    
+    system_prompt = escape_prompt_variables(system_prompt)
 
     max_attempts = MAX_SQL_RETRY_ATTEMPTS
     previous_sql = None
@@ -341,6 +282,85 @@ async def generate_sql_from_text(
 
 
 @tool
+async def generate_sql_from_text(
+    text_conditions: str,
+    topic: Optional[str] = None,
+) -> str:
+    """Генерирует SQL WHERE условия из текстового описания на русском языке.
+
+    Публичная функция-обертка для обратной совместимости.
+    Использует is_init_message=False по умолчанию (обычный запрос).
+
+    Args:
+        text_conditions: Текстовое описание условий на русском языке
+        topic: Тема диалога для загрузки промпта из БД (опционально)
+
+    Returns:
+        SQL WHERE условия (без ключевого слова WHERE) для использования в execute_sql_request
+    """
+    return await _generate_sql_from_text_impl(
+        text_conditions=text_conditions,
+        topic=topic,
+        is_init_message=False,
+    )
+
+
+def create_sql_tools(is_init_message: bool = False):
+    """Создает инструменты для работы с SQL с привязанным is_init_message.
+    
+    Args:
+        is_init_message: Если True, это init_conversation (первое сообщение в диалоге)
+    
+    Returns:
+        Список инструментов с модифицированным generate_sql_from_text
+    """
+    @tool
+    async def generate_sql_from_text(text_conditions: str, topic: Optional[str] = None) -> str:
+        """Генерирует SQL WHERE условия из текстового описания на русском языке.
+
+        Преобразует текстовые условия в SQL WHERE условия для поиска товаров.
+        Использует LLM для понимания запроса и генерации правильного SQL.
+        Имеет встроенный retry механизм (3 попытки с exponential backoff).
+
+        ════════════════════════════════════════════════════════════════════════════════
+        КОГДА ИСПОЛЬЗОВАТЬ:
+        ════════════════════════════════════════════════════════════════════════════════
+
+        ✅ ОБЯЗАТЕЛЬНО используй для:
+        - Числовые условия по ЦЕНЕ: "цена меньше 80", "дешевле 100 рублей", "цена от 50 до 200"
+        - Числовые условия по ВЕСУ: "вес больше 5 кг", "минимальный заказ меньше 10"
+        - Числовые условия по СКИДКЕ: "скидка больше 15%", "скидка от 10 до 20"
+        - Комбинации числовых условий: "цена меньше 100 и скидка больше 10%"
+        - Пустые запросы или init_conversation → передай описание темы/категории в text_conditions
+
+        ════════════════════════════════════════════════════════════════════════════════
+        ВАЖНО - ПОСЛЕ ИСПОЛЬЗОВАНИЯ:
+        ════════════════════════════════════════════════════════════════════════════════
+
+        После вызова generate_sql_from_text ОБЯЗАТЕЛЬНО вызови execute_sql_request с полученными SQL условиями!
+
+        Алгоритм работы:
+        1. generate_sql_from_text("цена меньше 100") → получаешь SQL условия
+        2. execute_sql_request(sql_conditions) → получаешь товары
+
+        Args:
+            text_conditions: Текстовое описание условий на русском языке
+                            Примеры: "цена меньше 100 рублей", "товары с фото и цена от 50 до 200"
+            topic: Тема диалога для загрузки промпта из БД (опционально)
+
+        Returns:
+            SQL WHERE условия (без ключевого слова WHERE) для использования в execute_sql_request
+        """
+        return await _generate_sql_from_text_impl(
+            text_conditions=text_conditions,
+            topic=topic,
+            is_init_message=is_init_message,
+        )
+    
+    return [generate_sql_from_text]
+
+
+@tool
 async def execute_sql_request(
     sql_conditions: str, limit: int = DEFAULT_SQL_LIMIT
 ) -> str:
@@ -348,19 +368,6 @@ async def execute_sql_request(
 
     Выполняет поиск товаров по SQL WHERE условиям, сгенерированным через generate_sql_from_text.
     Возвращает до 50 товаров в компактном формате с ID для последующей отправки фото.
-
-    ════════════════════════════════════════════════════════════════════════════════
-    КОГДА ИСПОЛЬЗОВАТЬ:
-    ════════════════════════════════════════════════════════════════════════════════
-
-    ✅ Используй когда:
-    - У тебя есть готовые SQL WHERE условия от generate_sql_from_text
-    - Нужно выполнить SQL запрос для поиска товаров по числовым условиям
-    - После успешной генерации SQL условий нужно получить результаты
-
-    ❌ НЕ используй если:
-    - У тебя нет готовых SQL условий → сначала используй generate_sql_from_text
-    - Запрос не содержит числовых условий → используй vector_search
 
     ════════════════════════════════════════════════════════════════════════════════
     ВАЖНО - ПОСЛЕДОВАТЕЛЬНОСТЬ:
@@ -403,6 +410,8 @@ async def execute_sql_request(
 
         products_list = []
         product_ids = []
+        system_vars = await get_all_system_values()
+        
         for product in json_result:
             product_id = product.get('id')
             if product_id:
@@ -410,14 +419,15 @@ async def execute_sql_request(
 
             title = product.get('title', 'Не указано')
             supplier = product.get('supplier_name', '')
-            price = product.get('order_price_kg', '')
+            order_price = product.get('order_price_kg', '')
             region = product.get('from_region', '')
+
             
             product_lines = [f"📦 {title}"]
             if supplier and supplier != 'Не указано':
                 product_lines.append(f"   Поставщик: {supplier}")
-            if price and price != 'Не указано':
-                product_lines.append(f"   Цена: {price}₽/кг")
+            if order_price and order_price != 'Не указано':
+                product_lines.append(f"   Цена: {order_price}₽/кг")
             if region and region != 'Не указано':
                 product_lines.append(f"   Регион: {region}")
             
