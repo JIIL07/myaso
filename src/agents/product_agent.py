@@ -385,7 +385,8 @@ class ProductAgent(BaseAgent):
 
         try:
             logger.info(
-                f"[ProductAgent.run] Начало обработки запроса для {client_phone}, topic: {topic}"
+                f"[ProductAgent.run] Начало обработки запроса для {client_phone}, topic: {topic}, "
+                f"user_input (полный): '{user_input}'"
             )
 
             db_prompt = None
@@ -472,6 +473,10 @@ class ProductAgent(BaseAgent):
             input_with_context = user_input
             if context_parts:
                 input_with_context = user_input + "\n\n" + "\n".join(context_parts)
+            
+            logger.info(
+                f"[ProductAgent.run] Финальный запрос для агента (input_with_context): '{input_with_context}'"
+            )
 
             sql_tools = create_sql_tools(is_init_message=is_init_message)
             media_tools = create_media_tools(client_phone=client_phone, is_init_message=is_init_message)
