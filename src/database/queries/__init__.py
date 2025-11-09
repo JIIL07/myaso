@@ -13,10 +13,6 @@ from .orders_queries import (
     get_client_orders,
     get_last_order,
 )
-from .history_queries import (
-    get_conversation_history_count,
-    clear_conversation_history,
-)
 
 __all__ = [
     "get_random_products",
@@ -26,7 +22,5 @@ __all__ = [
     "get_client_profile_text",
     "get_client_orders",
     "get_last_order",
-    "get_conversation_history_count",
-    "clear_conversation_history",
 ]
 
