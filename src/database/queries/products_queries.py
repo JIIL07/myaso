@@ -1,7 +1,7 @@
 """SQL запросы для работы с товарами."""
 
-from typing import List, Dict, Any, Tuple
-import asyncpg
+from typing import Any, Dict, List, Tuple
+
 from src.database import get_pool
 from src.utils import records_to_json
 

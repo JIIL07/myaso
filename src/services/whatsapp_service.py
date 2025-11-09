@@ -1,10 +1,12 @@
 """Сервис для работы с WhatsApp API."""
 
 import logging
-import httpx
 from typing import Optional
-from src.config.settings import settings
+
+import httpx
+
 from src.config.constants import HTTP_TIMEOUT_SECONDS
+from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
 

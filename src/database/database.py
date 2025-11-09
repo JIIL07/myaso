@@ -4,9 +4,10 @@
 к базе данных вместо создания нового соединения для каждого запроса.
 """
 
-import os
 import logging
+import os
 from typing import Optional
+
 import asyncpg
 
 logger = logging.getLogger(__name__)

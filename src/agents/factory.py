@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import threading
 from typing import Any, Dict, Tuple, Type, TypeVar
-from threading import RLock
 
 from .base_agent import BaseAgent
 from .product_agent import ProductAgent
@@ -71,7 +71,7 @@ class AgentFactory:
     """
 
     _instance: "AgentFactory" | None = None
-    _lock = RLock()
+    _lock = threading.RLock()
 
     def __init__(self) -> None:
         self.registered_agents: Dict[str, Type[BaseAgent]] = {}

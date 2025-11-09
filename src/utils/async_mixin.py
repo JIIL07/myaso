@@ -1,5 +1,6 @@
-from typing import Any, TypeVar, List, Dict
 import re
+from typing import Any, Dict, List, TypeVar
+
 import asyncpg
 
 T = TypeVar("T", bound="AsyncMixin")

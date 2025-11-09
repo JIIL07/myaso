@@ -5,9 +5,11 @@ LangfuseHandler - callback handler для Langfuse.
 """
 
 from typing import Any, Dict, Optional
-from langfuse import Langfuse
+
 from langchain_core.callbacks.base import BaseCallbackHandler
+from langfuse import Langfuse
 from langfuse.callback import CallbackHandler as LangfuseCallbackHandler
+
 from src.config.settings import settings
 
 

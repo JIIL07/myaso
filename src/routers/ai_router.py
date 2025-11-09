@@ -1,21 +1,21 @@
-from fastapi import APIRouter, BackgroundTasks
-from typing import Optional, Dict, Any, List
 import logging
-from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, BackgroundTasks
+from supabase import AClient
+
+from src.agents.factory import AgentFactory
+from src.config.settings import settings
 from src.models import (
-    UserMessageRequest,
+    ClientProfileResponse,
     InitConverastionRequest,
     ResetConversationRequest,
-    ClientProfileResponse,
+    UserMessageRequest,
 )
-from src.agents.factory import AgentFactory
-from src.utils import remove_markdown_symbols
+from src.services.whatsapp_service import send_message
+from src.utils import get_supabase_client, remove_markdown_symbols
 from src.utils.memory import SupabaseConversationMemory
 from src.utils.phone_validator import normalize_phone, validate_phone
-from src.config.settings import settings
-from src.utils import get_supabase_client
-from src.services.whatsapp_service import send_message
-from supabase import AClient
 
 logger = logging.getLogger(__name__)
 

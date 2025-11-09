@@ -1,7 +1,8 @@
 from fastapi import FastAPI
+
+from src.middleware.cors_middleware import setup_cors
 from src.routers import ai_router, health
 from src.utils.logger import setup_logging
-from src.middleware.cors_middleware import setup_cors
 
 setup_logging()
 

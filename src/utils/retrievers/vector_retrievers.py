@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from typing import Any, List, Sequence, Dict
+import asyncio
+import logging
 import os
 import re
-import logging
-import asyncio
+from typing import Any, Dict, List, Sequence
 
 import asyncpg
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
+from openai import OpenAI
 
-from src.config.settings import settings
-from src.database import get_pool
 from src.config.constants import (
     DEFAULT_VECTOR_SEARCH_K,
-    EMBEDDING_DELAY_SECONDS,
     EMBEDDING_BATCH_SIZE,
+    EMBEDDING_DELAY_SECONDS,
 )
-from openai import OpenAI
+from src.config.settings import settings
+from src.database import get_pool
 
 logger = logging.getLogger(__name__)
 

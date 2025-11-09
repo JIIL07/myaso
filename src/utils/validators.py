@@ -4,14 +4,15 @@
 перед их использованием в запросах к базе данных.
 """
 
-import re
 import logging
+import re
+
 from src.config.constants import (
+    ALLOWED_SQL_COLUMNS,
+    ALLOWED_SQL_FUNCTIONS,
+    ALLOWED_SQL_OPERATORS,
     DANGEROUS_SQL_KEYWORDS,
     FORBIDDEN_SQL_PATTERNS,
-    ALLOWED_SQL_COLUMNS,
-    ALLOWED_SQL_OPERATORS,
-    ALLOWED_SQL_FUNCTIONS,
 )
 
 logger = logging.getLogger(__name__)

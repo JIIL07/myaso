@@ -1,11 +1,13 @@
 """Health check endpoints."""
 
 import logging
+
+import httpx
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from src.utils import get_supabase_client
+
 from src.config.settings import settings
-import httpx
+from src.utils import get_supabase_client
 
 logger = logging.getLogger(__name__)
 

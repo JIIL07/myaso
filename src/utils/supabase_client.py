@@ -6,7 +6,8 @@
 
 import logging
 from typing import Optional
-from supabase import acreate_client, AClient, AsyncClientOptions
+
+from supabase import AClient, AsyncClientOptions, acreate_client
 
 from src.config.settings import settings
 

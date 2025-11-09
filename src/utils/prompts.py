@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Optional, Dict, Any
 import logging
 import re
+from typing import Any, Dict, Optional
 
 from src.utils import get_supabase_client
 

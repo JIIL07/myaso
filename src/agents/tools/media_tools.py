@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import List
 import logging
+from typing import List
+
 import httpx
 from langchain_core.tools import tool
 
-from src.config.settings import settings
 from src.config.constants import HTTP_TIMEOUT_SECONDS
+from src.config.settings import settings
 from src.utils import get_supabase_client
 
 logger = logging.getLogger(__name__)
@@ -61,38 +62,14 @@ def create_media_tools(client_phone: str, is_init_message: bool = False):
 
         НАЗНАЧЕНИЕ: Отправляет фотографии товаров клиенту через WhatsApp
 
-        ИСПОЛЬЗУЙ ТОЛЬКО В ДВУХ СЛУЧАЯХ:
+        ИСПОЛЬЗУЙ:
 
         1. Когда пользователь ЯВНО просит показать/отправить фото:
-           - "отправь фото", "покажи фото", "фотографии", "покажи фотографии товаров"
-           - "отправь фото этих товаров", "хочу увидеть фото"
-           - "покажи фото грудинки свиной", "отправь фото товаров от Коралл"
-
         2. При инициализации разговора (init_conversation) - первое сообщение в диалоге
 
-        ВАЖНО - ДВА СЦЕНАРИЯ:
-
-        СЦЕНАРИЙ 1: Клиент просит фото КОНКРЕТНЫХ товаров
-        Пример: "покажи фото грудинки свиной", "отправь фото товаров от Коралл"
-        Алгоритм:
-        1. СНАЧАЛА найди товары с require_photo=True:
-           - vector_search(query="грудинка свиная", require_photo=True)
-           - или execute_sql_request(sql_conditions="...", require_photo=True)
-        2. Получи ID из ответа: [PRODUCT_IDS]{"product_ids": [789, 790]}[/PRODUCT_IDS]
-        3. ПОТОМ отправь фото: show_product_photos(product_ids=[789, 790])
-        4. ВАЖНО: Возьми ТОЛЬКО первые 1-3 ID (максимум 3!) даже если найдено больше товаров
-
-        СЦЕНАРИЙ 2: Клиент просто просит "отправь фото" (без уточнения)
-        Пример: После поиска "есть коралл" → клиент: "отправь фото"
-        Алгоритм:
-        1. Используй ID из ПОСЛЕДНЕГО ответа инструментов поиска в chat_history
-        2. Извлеки product_ids из секции [PRODUCT_IDS] из последнего ответа
-        3. show_product_photos(product_ids=[извлеченные ID])
-        4. ВАЖНО: Возьми ТОЛЬКО первые 1-3 ID (максимум 3!)
-
         ОГРАНИЧЕНИЯ КОЛИЧЕСТВА ФОТО:
-        - При обычных запросах отправляется МАКСИМУМ 1-3 фото (первые товары из списка)
-        - При init_conversation отправляется МАКСИМУМ 2 фото (первые два товара)
+        - При обычных запросах отправляется МАКСИМУМ 1-3 фото
+        - При init_conversation отправляется МАКСИМУМ 2 фото
         - НЕ передавай все найденные ID, даже если их много!
         - Отправляются только товары, у которых есть фотография в базе данных
 

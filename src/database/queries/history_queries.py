@@ -1,6 +1,7 @@
 """SQL запросы для работы с историей диалогов."""
 
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 from src.utils import get_supabase_client
 
 

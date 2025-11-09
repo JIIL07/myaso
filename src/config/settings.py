@@ -4,9 +4,10 @@
 """
 
 from pydantic import BaseModel
-from .llm_config import OpenRouterSettings, AlibabaSettings
+
 from .database_config import SupabaseSettings
 from .langfuse_config import LangFuseConfig
+from .llm_config import AlibabaSettings, OpenRouterSettings
 from .whatsapp_config import WhatsAppSettings
 
 

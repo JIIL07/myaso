@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+
 from langchain_core.tools import tool
 
 from src.database.queries.clients_queries import get_client_profile_text
-from src.database.queries.orders_queries import get_client_orders as get_client_orders_from_db
+from src.database.queries.orders_queries import (
+    get_client_orders as get_client_orders_from_db,
+)
 
 logger = logging.getLogger(__name__)
 

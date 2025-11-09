@@ -17,7 +17,6 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-
 from supabase import AClient
 
 from src.utils import AsyncMixin, get_supabase_client

@@ -1,6 +1,7 @@
 """SQL запросы для работы с заказами."""
 
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
 from src.utils import get_supabase_client
 
 

@@ -2,24 +2,31 @@
 
 from __future__ import annotations
 
-from typing import Optional, Dict
+import asyncio
 import json
 import logging
-import asyncio
+from typing import Optional
+
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
 
-from src.config.settings import settings
 from src.config.constants import (
-    DEFAULT_SQL_LIMIT,
-    TEXT_TO_SQL_TEMPERATURE,
     DANGEROUS_SQL_KEYWORDS,
+    DEFAULT_SQL_LIMIT,
     MAX_SQL_RETRY_ATTEMPTS,
+    TEXT_TO_SQL_TEMPERATURE,
 )
-from src.utils.prompts import get_prompt, escape_prompt_variables, get_all_system_values
-from src.utils import validate_sql_conditions
+from src.config.settings import settings
 from src.database.queries.products_queries import get_products_by_sql_conditions
+from src.utils import validate_sql_conditions
+from src.utils.field_normalizer import normalize_field_value
+from src.utils.price_calculator import calculate_final_price
+from src.utils.prompts import (
+    escape_prompt_variables,
+    get_all_system_values,
+    get_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +37,8 @@ TABLE: products
 
 COLUMNS:
 - id (int8) - primary key
-- title (text) - название товара "Грудинка Премиум"
-- from_region (text) - регион "Бурятия", "Сибирь"
+- title (text) - название товара
+- from_region (text) - регион
 - photo (text) - URL фото
 - pricelist_date (date) - дата прайслиста
 - supplier_name (text) - поставщик
@@ -63,7 +70,6 @@ async def _generate_sql_from_text_impl(
     Returns:
         SQL WHERE условия (без ключевого слова WHERE) для использования в execute_sql_request
     """
-    is_init_conversation = is_init_message
     db_prompt = None
     if topic:
         db_prompt = await get_prompt(topic)
@@ -240,55 +246,11 @@ async def _generate_sql_from_text_impl(
 
     raise ValueError("Не удалось сгенерировать SQL условия")
 
-
-@tool
-async def generate_sql_from_text(
-    text_conditions: str,
-    topic: Optional[str] = None,
-) -> str:
-    """Генерирует SQL WHERE условия из текстового описания на русском языке.
-
-    НАЗНАЧЕНИЕ: Генерирует SQL WHERE условия из текстового описания на русском языке
-
-    ОБЯЗАТЕЛЬНО ИСПОЛЬЗУЙ ДЛЯ:
-    - Числовые условия по ЦЕНЕ: "цена меньше 80", "дешевле 100 рублей", "цена от 50 до 200"
-    - Числовые условия по ВЕСУ: "вес больше 5 кг", "минимальный заказ меньше 10"
-    - Числовые условия по СКИДКЕ: "скидка больше 15%", "скидка от 10 до 20"
-    - Комбинации числовых условий: "цена меньше 100 и скидка больше 10%"
-    - Поиск всех товаров от поставщика: "весь коралл", "все товары от коралл", "покажи весь коралл"
-      ВАЖНО: Для таких запросов создай условие supplier_name ILIKE '%коралл%' БЕЗ других ограничений!
-    - Пустые запросы или init_conversation → передай описание темы/категории в text_conditions
-
-    НЕ ИСПОЛЬЗУЙ ДЛЯ:
-    - Только название поставщика БЕЗ чисел: "товары от Мироторг" → используй vector_search
-    - Только название региона БЕЗ чисел: "мясо из Сибири" → используй vector_search
-    - Только текстовые критерии БЕЗ чисел: "говядина", "стейки" → используй vector_search
-
-    ВАЖНО: После вызова generate_sql_from_text ОБЯЗАТЕЛЬНО вызови execute_sql_request с полученными SQL условиями!
-
-    Алгоритм работы:
-    1. generate_sql_from_text("цена меньше 100") → получаешь SQL условия
-    2. execute_sql_request(sql_conditions) → получаешь товары
-
-    Args:
-        text_conditions: Текстовое описание условий на русском языке
-        topic: Тема диалога для загрузки промпта из БД (опционально)
-
-    Returns:
-        SQL WHERE условия (без ключевого слова WHERE) для использования в execute_sql_request
-    """
-    return await _generate_sql_from_text_impl(
-        text_conditions=text_conditions,
-        topic=topic,
-        is_init_message=False,
-    )
-
-
 def create_sql_tools(is_init_message: bool = False):
     """Создает инструменты для работы с SQL с привязанным is_init_message.
     
     Args:
-        is_init_message: Если True, это init_conversation (первое сообщение в диалоге)
+        is_init_message: Если True, это init_conversation
     
     Returns:
         Список инструментов с модифицированным generate_sql_from_text
@@ -299,25 +261,13 @@ def create_sql_tools(is_init_message: bool = False):
 
         НАЗНАЧЕНИЕ: Генерирует SQL WHERE условия из текстового описания на русском языке
 
-        ОБЯЗАТЕЛЬНО ИСПОЛЬЗУЙ ДЛЯ:
-        - Числовые условия по ЦЕНЕ: "цена меньше 80", "дешевле 100 рублей", "цена от 50 до 200"
-        - Числовые условия по ВЕСУ: "вес больше 5 кг", "минимальный заказ меньше 10"
-        - Числовые условия по СКИДКЕ: "скидка больше 15%", "скидка от 10 до 20"
-        - Комбинации числовых условий: "цена меньше 100 и скидка больше 10%"
-        - Поиск всех товаров от поставщика: "весь коралл", "все товары от коралл", "покажи весь коралл"
-          ВАЖНО: Для таких запросов создай условие supplier_name ILIKE '%коралл%' БЕЗ других ограничений!
-        - Пустые запросы или init_conversation → передай описание темы/категории в text_conditions
-
-        НЕ ИСПОЛЬЗУЙ ДЛЯ:
-        - Только название поставщика БЕЗ чисел: "товары от Мироторг" → используй vector_search
-        - Только название региона БЕЗ чисел: "мясо из Сибири" → используй vector_search
-        - Только текстовые критерии БЕЗ чисел: "говядина", "стейки" → используй vector_search
-
-        ВАЖНО: После вызова generate_sql_from_text ОБЯЗАТЕЛЬНО вызови execute_sql_request с полученными SQL условиями!
-
-        Алгоритм работы:
-        1. generate_sql_from_text("цена меньше 100") → получаешь SQL условия
-        2. execute_sql_request(sql_conditions) → получаешь товары
+        ИСПОЛЬЗУЙ ДЛЯ:
+        - Числовые условия по ЦЕНЕ
+        - Числовые условия по ВЕСУ
+        - Числовые условия по СКИДКЕ
+        - Комбинации числовых условий
+        - Поиск всех товаров от поставщика
+        - Пустые запросы или init_conversation
 
         Args:
             text_conditions: Текстовое описание условий на русском языке
@@ -347,13 +297,9 @@ async def execute_sql_request(
     - У тебя есть готовые SQL WHERE условия от generate_sql_from_text
     - Нужно выполнить SQL запрос для поиска товаров по числовым условиям
 
-    НЕ ИСПОЛЬЗУЙ ЕСЛИ:
-    - У тебя нет готовых SQL условий → сначала используй generate_sql_from_text
-    - Запрос не содержит числовых условий → используй vector_search
-
     ВАЖНО: Всегда используй в паре с generate_sql_from_text:
-    1. generate_sql_from_text("цена меньше 100") → получаешь SQL условия
-    2. execute_sql_request(sql_conditions) → получаешь товары
+    1. generate_sql_from_text(text_conditions)
+    2. execute_sql_request(sql_conditions)
 
     ПАРАМЕТР require_photo:
     - require_photo=True: Используй когда клиент запрашивает фото (например, "отправь фото грудинки")
@@ -362,13 +308,6 @@ async def execute_sql_request(
       После поиска с require_photo=True, обязательно вызови show_product_photos для отправки фото
     - require_photo=False: По умолчанию, возвращаются все товары независимо от наличия фото
       Используй когда клиент просто спрашивает о товарах без запроса на фото
-
-    ПРИМЕРЫ ПРАВИЛЬНОГО ИСПОЛЬЗОВАНИЯ:
-    - Запрос: "покажи фото товаров от Коралл" → 
-      execute_sql_request(sql_conditions="supplier_name ILIKE '%коралл%'", require_photo=True)
-    - Запрос: "цена меньше 100" → 
-      generate_sql_from_text("цена меньше 100") → 
-      execute_sql_request(sql_conditions="order_price_kg < 100", require_photo=False)
 
     Args:
         sql_conditions: SQL WHERE условия (без ключевого слова WHERE), полученные от generate_sql_from_text
@@ -410,18 +349,27 @@ async def execute_sql_request(
                 product_ids.append(product_id)
 
             title = product.get('title', 'Не указано')
-            supplier = product.get('supplier_name', '')
-            order_price = product.get('order_price_kg', '')
-            region = product.get('from_region', '')
-
+            supplier = normalize_field_value(product.get('supplier_name'), 'text')
+            order_price = product.get('order_price_kg')
+            region = normalize_field_value(product.get('from_region'), 'text')
+            min_order = normalize_field_value(product.get('min_order_weight_kg'), 'number')
+            has_photo = bool(product.get('photo') and product.get('photo').strip())
+            
+            final_price = calculate_final_price(order_price, system_vars)
             
             product_lines = [f"📦 {title}"]
-            if supplier and supplier != 'Не указано':
-                product_lines.append(f"   Поставщик: {supplier}")
-            if order_price and order_price != 'Не указано':
-                product_lines.append(f"   Цена: {order_price}₽/кг")
-            if region and region != 'Не указано':
-                product_lines.append(f"   Регион: {region}")
+            product_lines.append(f"   Поставщик: {supplier}")
+            if final_price != "Цена по запросу":
+                product_lines.append(f"   Цена: {final_price}₽/кг")
+            else:
+                product_lines.append(f"   Цена: {final_price}")
+            product_lines.append(f"   Регион: {region}")
+            if min_order == "по запросу":
+                product_lines.append(f"   Минимальный заказ: {min_order}")
+            else:
+                product_lines.append(f"   Минимальный заказ: {min_order} кг")
+            if require_photo and has_photo:
+                product_lines.append(f"   📷 Есть фото")
             
             products_list.append("\n".join(product_lines))
 

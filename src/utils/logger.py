@@ -1,6 +1,8 @@
-import logging
 import json
+import logging
+import os
 from datetime import datetime
+
 from pythonjsonlogger import jsonlogger
 
 
@@ -63,8 +65,6 @@ def setup_logging():
 
     if _logging_setup_done:
         return
-
-    import os
 
     log_format = os.getenv("LOG_FORMAT", "json")
     log_level = os.getenv("LOG_LEVEL", "INFO")

@@ -6,40 +6,41 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
-import logging
 import hashlib
-import json
+import logging
 from datetime import date
+from typing import Any, List, Optional
+
 from langchain_classic.agents import (
     AgentExecutor,
     create_openai_tools_agent,
     create_react_agent,
 )
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
-from langchain_openai import ChatOpenAI
 from langchain_core.callbacks.stdout import StdOutCallbackHandler
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableConfig
+from langchain_openai import ChatOpenAI
 
-from src.config.settings import settings
 from src.config.constants import (
     DEFAULT_TEMPERATURE,
-    MAX_AGENT_ITERATIONS,
     MAX_AGENT_EXECUTION_TIME,
+    MAX_AGENT_ITERATIONS,
 )
+from src.config.settings import settings
+from src.database.queries.clients_queries import get_client_is_friend
 from src.utils.callbacks.langfuse_callback import LangfuseHandler
+from src.utils.prompts import (
+    build_prompt_with_context,
+    get_all_system_values,
+    get_prompt,
+)
+
 from .base_agent import BaseAgent
-from .tools.product_tools import vector_search, get_random_products
-from .tools.sql_tools import execute_sql_request, create_sql_tools
 from .tools.client_tools import get_client_profile
 from .tools.media_tools import create_media_tools
-from src.utils.prompts import (
-    get_prompt,
-    get_all_system_values,
-    build_prompt_with_context,
-)
-from src.database.queries.clients_queries import get_client_is_friend
+from .tools.product_tools import get_random_products, vector_search
+from .tools.sql_tools import create_sql_tools, execute_sql_request
 
 logger = logging.getLogger(__name__)
 
@@ -82,28 +83,27 @@ class ProductAgent(BaseAgent):
     """
 
     DEFAULT_SYSTEM_PROMPT = """
-
 ==========================================================================================================
 ДОСТУПНЫЕ ИНСТРУМЕНТЫ (TOOLS)
 ==========================================================================================================
 
 У тебя есть следующие инструменты для работы:
 
-1. vector_search(query: str) → str
+1. vector_search(query: str, require_photo: bool = False) → str
 
   НАЗНАЧЕНИЕ: Семантический поиск товаров по текстовому запросу (векторный поиск)
 
-  ИСПОЛЬЗУЙ ДЛЯ:
-  - Текстовые запросы: "что у вас есть?", "покажи мясо", "какие стейки?"
-  - Поиск по типу/части: "грудинка свиная", "говядина", "стейки", "полуфабрикаты"
-  - Поиск по поставщику: "товары от Коралл", "продукция Мироторг"
-  - Поиск по региону: "мясо из Сибири", "товары из Бурятии"
-  - Комбинации текстовых критериев: "свинина охлажденная", "стейки от Коралл"
+    ИСПОЛЬЗУЙ ДЛЯ:
+    - Текстовые запросы по названию/типу
+    - Поиск по текстовым атрибутам (без чисел)
+    - Семантический поиск (синонимы, контекст)
 
-  НЕ ИСПОЛЬЗУЙ ДЛЯ:
-  - Числовые условия: "цена меньше 100" → используй generate_sql_from_text
-  - Условия по весу: "вес больше 5 кг" → используй generate_sql_from_text
-  - Условия по скидке: "скидка больше 15%" → используй generate_sql_from_text
+    ПАРАМЕТР require_photo:
+    - require_photo=True: Используй когда клиент запрашивает фото (например, "отправь фото грудинки")
+      В этом случае будут возвращены ТОЛЬКО товары с фотографиями (photo IS NOT NULL AND photo != '')
+      После поиска с require_photo=True, обязательно вызови show_product_photos для отправки фото
+    - require_photo=False: По умолчанию, возвращаются все товары независимо от наличия фото
+      Используй когда клиент просто спрашивает о товарах без запроса на фото
 
   ВОЗВРАЩАЕТ: Список найденных товаров (до 50) с ID в секции [PRODUCT_IDS]
 
@@ -111,55 +111,52 @@ class ProductAgent(BaseAgent):
 
   НАЗНАЧЕНИЕ: Генерирует SQL WHERE условия из текстового описания на русском языке
 
-  ОБЯЗАТЕЛЬНО ИСПОЛЬЗУЙ ДЛЯ:
-  - Числовые условия по ЦЕНЕ: "цена меньше 80", "дешевле 100 рублей", "цена от 50 до 200"
-  - Числовые условия по ВЕСУ: "вес больше 5 кг", "минимальный заказ меньше 10"
-  - Числовые условия по СКИДКЕ: "скидка больше 15%", "скидка от 10 до 20"
-  - Комбинации числовых условий: "цена меньше 100 и скидка больше 10%"
-  - Пустые запросы или init_conversation → передай описание темы/категории
-
-  НЕ ИСПОЛЬЗУЙ ДЛЯ:
-  - Только название поставщика БЕЗ чисел: "товары от Мироторг" → используй vector_search
-  - Только название региона БЕЗ чисел: "мясо из Сибири" → используй vector_search
-  - Только текстовые критерии БЕЗ чисел: "говядина", "стейки" → используй vector_search
+        ИСПОЛЬЗУЙ ДЛЯ:
+        - Числовые условия по ЦЕНЕ
+        - Числовые условия по ВЕСУ
+        - Числовые условия по СКИДКЕ
+        - Комбинации числовых условий
+        - Поиск всех товаров от поставщика
+        - Пустые запросы или init_conversation
 
   ВАЖНО: После вызова generate_sql_from_text ОБЯЗАТЕЛЬНО вызови execute_sql_request с полученными SQL условиями!
-
   ВОЗВРАЩАЕТ: SQL WHERE условия (без ключевого слова WHERE) для использования в execute_sql_request
 
-3. execute_sql_request(sql_conditions: str, limit: int = 50) → str
+3. execute_sql_request(sql_conditions: str, limit: int = 50, require_photo: bool = False) → str
 
   НАЗНАЧЕНИЕ: Выполняет SQL запрос с WHERE условиями и возвращает товары
 
   ИСПОЛЬЗУЙ КОГДА:
-   - У тебя есть готовые SQL WHERE условия от generate_sql_from_text
-   - Нужно выполнить SQL запрос для поиска товаров по числовым условиям
-
-  НЕ ИСПОЛЬЗУЙ ЕСЛИ:
-   - У тебя нет готовых SQL условий → сначала используй generate_sql_from_text
-   - Запрос не содержит числовых условий → используй vector_search
+    - У тебя есть готовые SQL WHERE условия от generate_sql_from_text
+    - Нужно выполнить SQL запрос для поиска товаров по числовым условиям
 
   ВАЖНО: Всегда используй в паре с generate_sql_from_text:
-   1. generate_sql_from_text("цена меньше 100") → получаешь SQL условия
-   2. execute_sql_request(sql_conditions) → получаешь товары
+    1. generate_sql_from_text(text_conditions)
+    2. execute_sql_request(sql_conditions)
+
+    ПАРАМЕТР require_photo:
+    - require_photo=True: Используй когда клиент запрашивает фото (например, "отправь фото грудинки")
+      В этом случае автоматически добавляется условие: photo IS NOT NULL AND photo != ''
+      Это условие объединяется с существующими условиями через AND
+      После поиска с require_photo=True, обязательно вызови show_product_photos для отправки фото
+    - require_photo=False: По умолчанию, возвращаются все товары независимо от наличия фото
+      Используй когда клиент просто спрашивает о товарах без запроса на фото
 
   ВОЗВРАЩАЕТ: Список найденных товаров (до 50) с ID в секции [PRODUCT_IDS]
 
-4. get_random_products(limit: int = 10) → str
+4. get_random_products(limit: int = 10, require_photo: bool = False) → str
 
-  НАЗНАЧЕНИЕ: Получает случайные товары из ассортимента (FALLBACK инструмент)
+    ИСПОЛЬЗУЙ ТОЛЬКО КОГДА:
+    - vector_search вернул "Товары по вашему запросу не найдены"
+    - execute_sql_request вернул "Товары по указанным условиям не найдены"
+    - Все остальные инструменты поиска не дали результатов
+    - Нужно показать примеры товаров из ассортимента когда ничего не найдено
 
-  ИСПОЛЬЗУЙ ТОЛЬКО КОГДА:
-  - vector_search вернул "Товары по вашему запросу не найдены"
-  - execute_sql_request вернул "Товары по указанным условиям не найдены"
-  - Все остальные инструменты поиска не дали результатов
-  - Нужно показать примеры товаров из ассортимента когда ничего не найдено
-
-  НЕ ИСПОЛЬЗУЙ ЕСЛИ:
-  - vector_search или execute_sql_request уже нашли товары
-  - Есть конкретный запрос, который можно обработать другими инструментами
-
-  ВАЖНО: Это инструмент последней надежды! Всегда сначала пробуй vector_search или generate_sql_from_text + execute_sql_request.
+    ПАРАМЕТР require_photo:
+    - require_photo=True: Используй когда клиент запрашивает фото
+      В этом случае будут возвращены ТОЛЬКО товары с фотографиями
+      После поиска с require_photo=True, обязательно вызови show_product_photos для отправки фото
+    - require_photo=False: По умолчанию, возвращаются все товары независимо от наличия фото
 
   ВОЗВРАЩАЕТ: Список случайных товаров (до 20) с ID в секции [PRODUCT_IDS]
 
@@ -167,30 +164,17 @@ class ProductAgent(BaseAgent):
 
   НАЗНАЧЕНИЕ: Отправляет фотографии товаров клиенту через WhatsApp
 
-  ИСПОЛЬЗУЙ ТОЛЬКО В ДВУХ СЛУЧАЯХ:
+  ИСПОЛЬЗУЙ:
 
-  1. Когда пользователь ЯВНО просит показать/отправить фото:
-    - "отправь фото", "покажи фото", "фотографии", "покажи фотографии товаров"
-    - "отправь фото этих товаров", "хочу увидеть фото"
-    - "покажи фото грудинки свиной", "отправь фото товаров от Коралл"
+        1. Когда пользователь ЯВНО просит показать/отправить фото:
+        2. При инициализации разговора (init_conversation) - первое сообщение в диалоге
 
-  2. При инициализации разговора (init_conversation) - первое сообщение в диалоге
-
-  ВАЖНО - ДВА СЦЕНАРИЯ:
-
-   СЦЕНАРИЙ 1: Клиент просит фото КОНКРЕТНЫХ товаров
-   Пример: "покажи фото грудинки свиной", "отправь фото товаров от Коралл"
-   Алгоритм:
-   1. СНАЧАЛА найди товары: vector_search("грудинка свиная") или execute_sql_request
-   2. Получи ID из ответа: [PRODUCT_IDS]{"product_ids": [789, 790]}[/PRODUCT_IDS]
-   3. ПОТОМ отправь фото: show_product_photos product_ids=[789, 790]
-
-   СЦЕНАРИЙ 2: Клиент просто просит "отправь фото" (без уточнения)
-   Пример: После поиска "есть коралл" → клиент: "отправь фото"
-   Алгоритм:
-   1. Используй ID из ПОСЛЕДНЕГО ответа инструментов поиска в chat_history
-   2. Извлеки product_ids из секции [PRODUCT_IDS] из последнего ответа
-   3. show_product_photos product_ids=[извлеченные ID]
+  ОГРАНИЧЕНИЯ КОЛИЧЕСТВА ФОТО:
+  
+        - При обычных запросах отправляется МАКСИМУМ 1-3 фото
+        - При init_conversation отправляется МАКСИМУМ 2 фото
+        - НЕ передавай все найденные ID, даже если их много!
+        - Отправляются только товары, у которых есть фотография в базе данных
 
   ВОЗВРАЩАЕТ: Статус отправки фотографий (количество отправленных, не отправленных, не найденных товаров)
 
@@ -204,32 +188,7 @@ class ProductAgent(BaseAgent):
   - Нужно узнать бизнес-область клиента для адаптации предложений
   - Нужно адаптировать ответы под профиль клиента
 
-  НЕ ИСПОЛЬЗУЙ ЕСЛИ:
-  - Информация о клиенте не нужна для ответа
-  - Запрос не требует персонализации
-
   ВОЗВРАЩАЕТ: Информация о профиле клиента (имя, контакты, город, бизнес-данные, предпочтения)
-
-==========================================================================================================
-ПРАВИЛА ИСПОЛЬЗОВАНИЯ ИНСТРУМЕНТОВ
-==========================================================================================================
-
-АЛГОРИТМ ВЫБОРА ИНСТРУМЕНТА:
-
-1. Если запрос содержит ЧИСЛОВЫЕ условия (цена, вес, скидка):
-   → generate_sql_from_text → execute_sql_request
-
-2. Если запрос содержит ТОЛЬКО текстовые критерии (название, поставщик, регион):
-   → vector_search
-
-3. Если все инструменты поиска не дали результатов:
-   → get_random_products (fallback)
-
-4. Если клиент просит фото:
-   → Сначала найди товары (vector_search или execute_sql_request), затем show_product_photos
-
-5. Если нужна информация о клиенте:
-   → get_client_profile или get_client_orders
 
 ==========================================================================================================
 ИСПОЛЬЗОВАНИЕ ИНСТРУМЕНТОВ ПОИСКА С ПАРАМЕТРОМ require_photo
@@ -241,32 +200,16 @@ class ProductAgent(BaseAgent):
 1. Используй require_photo=True в vector_search, execute_sql_request, get_random_products когда:
    - Клиент говорит "отправь фото", "покажи фото", "фото грудинки", "отправь фото товаров"
    - Клиент просит увидеть фотографии товаров
-   - В запросе есть слова "фото", "фотографи" в контексте просьбы показать
+   - В запросе есть слова "фото", "фотографии" в контексте просьбы показать
 
-2. Примеры правильного использования:
-   - Запрос: "отправь фото грудинки свиной" → vector_search(query="грудинка свиная", require_photo=True)
-   - Запрос: "покажи фото товаров от Коралл" → execute_sql_request(sql_conditions="supplier_name ILIKE '%коралл%'", require_photo=True)
-   - Запрос: "хочу увидеть фото стейков" → vector_search(query="стейки", require_photo=True)
-
-3. Когда require_photo=True:
-   - Инструменты возвращают ТОЛЬКО товары с фотографиями
+2. Когда require_photo=True:
+   - Инструменты возвращают товары с фотографиями и описанием
    - Если товаров с фото не найдено, инструмент вернет сообщение об этом
    - После поиска с require_photo=True, обязательно вызови show_product_photos для отправки фото
 
-4. Когда require_photo=False (по умолчанию):
+3. Когда require_photo=False (по умолчанию):
    - Инструменты возвращают все товары независимо от наличия фото
    - Используй когда клиент просто спрашивает о товарах без запроса на фото
-
-==========================================================================================================
-Ограничения
-==========================================================================================================
-
-- Информацию, которая тебе доступна (цены, товары, регион происхождения, регион клиента и т.д.)
-- Твои инструменты поиска: vector_search, generate_sql_from_text, execute_sql_request, get_random_products
-- Инструменты для работы с клиентом: get_client_profile
-- Инструмент для отправки фото: show_product_photos
-- Данные из результатов поиска товаров
-- Системные переменные из блока SYS VARIABLES для расчета цен
 """
 
     def __init__(
@@ -502,11 +445,6 @@ class ProductAgent(BaseAgent):
             client_phone=client_phone,
             session_id=f"{client_phone}_{date.today()}",
             trace_name=trace_name,
-        )
-
-        logger.info(
-            f"[ProductAgent.run] LangfuseHandler создан для {client_phone}, "
-            f"type={type(langfuse_handler).__name__}"
         )
 
         try:
