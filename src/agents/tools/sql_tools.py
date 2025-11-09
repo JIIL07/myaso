@@ -56,10 +56,6 @@ async def _generate_sql_from_text_impl(
 ) -> str:
     """Генерирует SQL WHERE условия из текстового описания на русском языке.
 
-    Преобразует текстовые условия в SQL WHERE условия для поиска товаров.
-    Использует LLM для понимания запроса и генерации правильного SQL.
-    Имеет встроенный retry механизм (3 попытки с exponential backoff).
-
     Args:
         text_conditions: Текстовое описание условий на русском языке
                         Примеры: "цена меньше 100 рублей", "товары с фото и цена от 50 до 200"
@@ -69,51 +65,17 @@ async def _generate_sql_from_text_impl(
     """
     is_init_conversation = is_init_message
     db_prompt = None
-    
     if topic:
         db_prompt = await get_prompt(topic)
-
-    if not db_prompt and is_init_conversation:
-        db_prompt = await get_prompt("Получить товары при инициализации диалога")
-
-    if not db_prompt:
-        if is_init_conversation:
-            db_prompt = await get_prompt("Получить товары при инициализации диалога")
-            if not db_prompt:
-                raise ValueError(
-                    "Промпт 'Получить товары при инициализации диалога' не найден в БД"
-                )
-        else:
-            db_prompt = ""
-    if is_init_conversation:
-        photo_instruction = """
-    КРИТИЧЕСКИ ВАЖНО - ТОВАРЫ С ФОТО:
-    ВСЕГДА добавляй условие для выбора только товаров с фотографиями: photo IS NOT NULL AND photo != ''
-    Это условие должно быть в КАЖДОМ SQL запросе!
-    Пример: order_price_kg < 100 AND photo IS NOT NULL AND photo != ''
-"""
-    else:
-        photo_instruction = """
-    КРИТИЧЕСКИ ВАЖНО - ТОВАРЫ С ФОТО:
-    НЕ добавляй автоматически условие photo IS NOT NULL!
-    Показывай ВСЕ товары, включая те, у которых нет фотографий.
-    Добавляй условие на фото ТОЛЬКО если пользователь ЯВНО просит товары с фото.
-    Пример для обычного запроса: order_price_kg < 100 (БЕЗ условия на фото)
-    Пример если пользователь просит с фото: order_price_kg < 100 AND photo IS NOT NULL AND photo != ''
-"""
 
     schema_info = f"""
     СХЕМА БАЗЫ ДАННЫХ: myaso
 
     {get_products_table_schema()}
-    
-    КОНТЕКСТ: {"Это init_conversation (первое сообщение в диалоге)." if is_init_conversation else "Это обычный запрос в диалоге."}
-{photo_instruction}
+
     ПРАВИЛА ДЛЯ WHERE УСЛОВИЙ:
     1. Используй ТОЛЬКО колонки из списка выше! Никаких других колонок не существует!
-    2. Используй только имена колонок БЕЗ префиксов (title, а не products.title или myaso.products.title)
-
-    """
+    2. Используй только имена колонок БЕЗ префиксов (title, а не products.title или myaso.products.title)"""
     
     if db_prompt:
         system_prompt = f"{db_prompt}\n\n{schema_info}"
@@ -137,9 +99,7 @@ async def _generate_sql_from_text_impl(
         try:
             if attempt > 1 and previous_sql and last_error:
                 error_hint = ""
-
                 error_lower = last_error.lower()
-
                 if "неразрешенных колонок" in error_lower or "column" in error_lower and "does not exist" in error_lower:
                     error_hint = f"""
 
