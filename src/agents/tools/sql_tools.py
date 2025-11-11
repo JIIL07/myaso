@@ -42,7 +42,7 @@ COLUMNS:
 - photo (text) - URL фото
 - pricelist_date (date) - дата прайслиста
 - supplier_name (text) - поставщик
-- delivery_cost_MSK (float8) - доставка до Москвы
+- delivery_cost_MSK (float8) - стоимость доставки до Москвы
 - package_weight (float8) - вес упаковки кг
 - prepayment_1t (int8) - предоплата за тонну
 - order_price_kg (float8) - ЦЕНА ЗА КГ в рублях

@@ -154,7 +154,6 @@ async def init_conversation_background(request: InitConverastionRequest):
   * Регион происхождения (from_region): "Регион: {{from_region}}"
   * Финальная цена за килограм (РАССЧИТАННАЯ): "Цена: {{final_price_kg:.2f}} р/кг" или "Цена: по запросу" если цена = 0
   * Минимальный объем отгрузки: "Мин. заказ: {{min_order_weight_kg}} кг"
-- Предупреждение: "⚠️ В цену не включена логистика. Готов рассчитать доставку после уточнения объема заказа."
 
 ПРИМЕР ПОЛНОГО ЦИКЛА:
 1. get_client_profile(phone="{request.client_phone}")
