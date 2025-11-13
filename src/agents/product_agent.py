@@ -457,6 +457,13 @@ class ProductAgent(BaseAgent):
             if topic:
                 try:
                     db_prompt = await get_prompt(topic)
+                    if db_prompt:
+                        logger.info(
+                            f"[ProductAgent.run] Загружен промпт из БД для topic '{topic}': "
+                            f"длина={len(db_prompt)} символов, первые 200 символов: '{db_prompt[:200]}...'"
+                        )
+                    else:
+                        logger.warning(f"[ProductAgent.run] Промпт для topic '{topic}' не найден в БД")
                 except Exception as e:
                     logger.error(
                         f"[ProductAgent.run] Не удалось загрузить промпт для topic '{topic}': {e}"
@@ -470,8 +477,16 @@ class ProductAgent(BaseAgent):
 
             if db_prompt:
                 base_prompt = db_prompt + f"\n\n{self.DEFAULT_SYSTEM_PROMPT}"
+                logger.info(
+                    f"[ProductAgent.run] Промпт из БД объединен с системным промптом. "
+                    f"Общая длина base_prompt: {len(base_prompt)} символов"
+                )
             else:
                 base_prompt = self.DEFAULT_SYSTEM_PROMPT
+                logger.info(
+                    f"[ProductAgent.run] Используется только системный промпт (промпт из БД не загружен). "
+                    f"Длина: {len(base_prompt)} символов"
+                )
 
             chat_history: List[BaseMessage] = []
             if self.memory is not None:
@@ -524,6 +539,13 @@ class ProductAgent(BaseAgent):
                 system_vars=system_vars if system_vars else None,
             )
             self.SYSTEM_PROMPT = final_prompt
+            
+            logger.info(
+                f"[ProductAgent.run] Финальный SYSTEM_PROMPT собран и установлен для агента. "
+                f"Длина: {len(final_prompt)} символов. "
+                f"Содержит промпт из БД: {'ДА' if db_prompt else 'НЕТ'}. "
+                f"Первые 300 символов: '{final_prompt[:300]}...'"
+            )
 
             context_parts = []
             if client_greeted:

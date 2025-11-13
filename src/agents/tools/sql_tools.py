@@ -46,8 +46,6 @@ COLUMNS:
 - package_weight (float8) - вес упаковки кг
 - prepayment_1t (int8) - предоплата за тонну
 - order_price_kg (float8) - ЦЕНА ЗА КГ в рублях
-- min_order_weight_kg (int8) - МИНИМАЛЬНЫЙ ЗАКАЗ в кг
-- discount (text) - скидка
 - ready_made (bool) - готовый продукт
 - package_type (text) - тип упаковки
 - cooled_or_frozen (text) - охлажденный/замороженный
@@ -114,7 +112,7 @@ async def _generate_sql_from_text_impl(
 Ошибка: {last_error}
 
 ИСПРАВЛЕНИЕ:
-1. Проверь каждую колонку в SQL - используй ТОЛЬКО колонки из схемы: id, title, supplier_name, from_region, photo, pricelist_date, package_weight, order_price_kg, min_order_weight_kg, discount, ready_made, package_type, cooled_or_frozen, product_in_package
+1. Проверь каждую колонку в SQL - используй ТОЛЬКО колонки из схемы: id, title, supplier_name, from_region, photo, pricelist_date, package_weight, order_price_kg, discount, ready_made, package_type, cooled_or_frozen, product_in_package
 2. НЕ используй: topic, category, name, description - этих колонок НЕТ!
 3. Если нужно найти товары по теме - используй title ILIKE '%тема%'
 4. Удали все условия с несуществующими колонками
@@ -352,7 +350,6 @@ async def execute_sql_request(
             supplier = normalize_field_value(product.get('supplier_name'), 'text')
             order_price = product.get('order_price_kg')
             region = normalize_field_value(product.get('from_region'), 'text')
-            min_order = normalize_field_value(product.get('min_order_weight_kg'), 'number')
             has_photo = bool(product.get('photo') and product.get('photo').strip())
             
             final_price = calculate_final_price(order_price, system_vars)
@@ -364,10 +361,6 @@ async def execute_sql_request(
             else:
                 product_lines.append(f"   Цена: {final_price}")
             product_lines.append(f"   Регион: {region}")
-            if min_order == "по запросу":
-                product_lines.append(f"   Минимальный заказ: {min_order}")
-            else:
-                product_lines.append(f"   Минимальный заказ: {min_order} кг")
             if require_photo and has_photo:
                 product_lines.append(f"   📷 Есть фото")
             

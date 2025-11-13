@@ -8,7 +8,7 @@ DEFAULT_VECTOR_SEARCH_K = 10
 DEFAULT_SQL_LIMIT = 50
 MAX_SQL_LIMIT = 100
 
-DEFAULT_TEMPERATURE = 0.8
+DEFAULT_TEMPERATURE = 0.7
 TEXT_TO_SQL_TEMPERATURE = 0.1
 
 MAX_AGENT_ITERATIONS = 15
@@ -56,7 +56,6 @@ ALLOWED_SQL_COLUMNS = {
     "pricelist_date",
     "package_weight",
     "order_price_kg",
-    "min_order_weight_kg",
     "discount",
     "ready_made",
     "package_type",

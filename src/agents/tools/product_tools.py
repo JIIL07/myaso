@@ -82,7 +82,6 @@ async def vector_search(query: str, require_photo: bool = False) -> str:
         supplier = normalize_field_value(metadata.get('supplier_name'), 'text')
         order_price = metadata.get('order_price_kg')
         region = normalize_field_value(metadata.get('from_region'), 'text')
-        min_order = normalize_field_value(metadata.get('min_order_weight_kg'), 'number')
         has_photo = bool(metadata.get('photo') and metadata.get('photo').strip())
         
         final_price = calculate_final_price(order_price, system_vars)
@@ -94,10 +93,6 @@ async def vector_search(query: str, require_photo: bool = False) -> str:
         else:
             product_lines.append(f"   Цена: {final_price}")
         product_lines.append(f"   Регион: {region}")
-        if min_order == "по запросу":
-            product_lines.append(f"   Минимальный заказ: {min_order}")
-        else:
-            product_lines.append(f"   Минимальный заказ: {min_order} кг")
         if require_photo and has_photo:
             product_lines.append(f"   📷 Есть фото")
         
@@ -170,7 +165,6 @@ async def get_random_products(limit: int = 10, require_photo: bool = False) -> s
             supplier = normalize_field_value(product.get('supplier_name'), 'text')
             order_price = product.get('order_price_kg')
             region = normalize_field_value(product.get('from_region'), 'text')
-            min_order = normalize_field_value(product.get('min_order_weight_kg'), 'number')
             has_photo = bool(product.get('photo') and product.get('photo').strip())
             
             final_price = calculate_final_price(order_price, system_vars)
@@ -182,10 +176,6 @@ async def get_random_products(limit: int = 10, require_photo: bool = False) -> s
             else:
                 product_lines.append(f"   Цена: {final_price}")
             product_lines.append(f"   Регион: {region}")
-            if min_order == "по запросу":
-                product_lines.append(f"   Минимальный заказ: {min_order}")
-            else:
-                product_lines.append(f"   Минимальный заказ: {min_order} кг")
             if require_photo and has_photo:
                 product_lines.append(f"   📷 Есть фото")
             

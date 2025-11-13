@@ -29,12 +29,7 @@ async def get_random_products(limit: int = 10) -> List[Dict[str, Any]]:
                     supplier_name,
                     from_region,
                     photo,
-                    order_price_kg,
-                    min_order_weight_kg,
-                    cooled_or_frozen,
-                    ready_made,
-                    package_type,
-                    discount
+                    order_price_kg
                 FROM myaso.products
                 ORDER BY RANDOM()
                 LIMIT $1
@@ -68,12 +63,7 @@ async def get_products_by_sql_conditions(
                     supplier_name,
                     from_region,
                     photo,
-                    order_price_kg,
-                    min_order_weight_kg,
-                    cooled_or_frozen,
-                    ready_made,
-                    package_type,
-                    discount
+                    order_price_kg
                 FROM myaso.products
                 WHERE {sql_conditions}
                 LIMIT $1

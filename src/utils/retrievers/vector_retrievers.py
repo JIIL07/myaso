@@ -126,15 +126,7 @@ class SupabaseVectorRetriever(BaseRetriever):
                       supplier_name,
                       from_region,
                       photo,
-                      pricelist_date,
-                      package_weight,
                       order_price_kg,
-                      min_order_weight_kg,
-                      discount,
-                      ready_made,
-                      package_type,
-                      cooled_or_frozen,
-                      product_in_package,
                       embedding <-> ($1::vector) AS distance
                     FROM myaso.products
                     WHERE embedding IS NOT NULL
@@ -162,7 +154,6 @@ class SupabaseVectorRetriever(BaseRetriever):
                 f"Supplier: {row_dict.get('supplier_name', '')}",
                 f"Region: {row_dict.get('from_region', '')}",
                 f"Price/kg: {row_dict.get('order_price_kg', '')}",
-                f"Min order (kg): {row_dict.get('min_order_weight_kg', '')}",
                 f"Cooled/Frozen: {row_dict.get('cooled_or_frozen', '')}",
                 f"Ready-made: {row_dict.get('ready_made', '')}",
             ]
