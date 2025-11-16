@@ -118,19 +118,31 @@ def get_delivery_markup(system_vars: Dict[str, str]) -> Tuple[Optional[float], O
 def calculate_final_price(
     order_price_kg: Union[float, str, None],
     system_vars: Dict[str, str],
+    supplier_name: Optional[str] = None,
 ) -> str:
     """Рассчитывает финальную цену с учетом наценок из системных переменных.
     
     Args:
         order_price_kg: Базовая цена за кг из БД (может быть None, 0, float, или строка)
         system_vars: Словарь системных переменных (topic -> value)
+        supplier_name: Название поставщика (опционально). Если поставщик "ООО "КИТ"", 
+                       финальная цена не рассчитывается
     
     Returns:
         Финальная цена как строка:
         - "Цена по запросу" если order_price_kg == 0, None, или пустая строка
+        - "Цена по запросу" если поставщик "ООО "КИТ""
         - Иначе: строка с ценой, округленной до 2 знаков (например, "385.00")
     """
     try:
+        # Если поставщик "ООО "КИТ"", не рассчитываем финальную цену
+        if supplier_name:
+            supplier_normalized = supplier_name.upper().strip()
+            # Проверяем разные варианты написания: "ООО КИТ", "ООО"КИТ"", "КИТ"
+            if "КИТ" in supplier_normalized and ("ООО" in supplier_normalized or supplier_normalized.startswith("КИТ")):
+                logger.debug(f"Поставщик {supplier_name} - ООО КИТ, финальная цена не рассчитывается")
+                return "Цена по запросу"
+        
         if order_price_kg is None:
             return "Цена по запросу"
         

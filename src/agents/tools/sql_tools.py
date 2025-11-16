@@ -352,7 +352,7 @@ async def execute_sql_request(
             region = normalize_field_value(product.get('from_region'), 'text')
             has_photo = bool(product.get('photo') and product.get('photo').strip())
             
-            final_price = calculate_final_price(order_price, system_vars)
+            final_price = calculate_final_price(order_price, system_vars, supplier_name=supplier)
             
             product_lines = [f"📦 {title}"]
             product_lines.append(f"   Поставщик: {supplier}")
