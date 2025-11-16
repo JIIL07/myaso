@@ -14,43 +14,45 @@ from src.utils import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
-async def send_whatsapp_image(phone: str, image_url: str, caption: str) -> bool:
-    """Отправляет изображение через WhatsApp API.
+async def send_whatsapp_image(phone: str, file_url: str, caption: str, extension: str = "png") -> bool:
+    """Отправляет файл через WhatsApp API.
 
     Args:
         phone: Номер телефона получателя
-        image_url: URL изображения
-        caption: Подпись к изображению
+        file_url: URL файла
+        caption: Подпись к файлу
+        extension: Тип файла (по умолчанию "png")
 
     Returns:
-        True если изображение успешно отправлено, False в случае ошибки
+        True если файл успешно отправлен, False в случае ошибки
     """
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
             response = await client.post(
-                url=settings.whatsapp.send_image_url,
+                url=settings.whatsapp.send_file_url,
                 json={
                     "recipient": phone,
-                    "image_url": image_url,
+                    "file_url": file_url,
                     "caption": caption,
+                    "extension": extension,
                 },
             )
             response.raise_for_status()
             logger.debug(
-                f"[send_whatsapp_image] Фото успешно отправлено для {phone}, "
+                f"[send_whatsapp_image] Файл успешно отправлен для {phone}, "
                 f"статус: {response.status_code}"
             )
             return True
     except httpx.HTTPStatusError as e:
         logger.error(
-            f"[send_whatsapp_image] Ошибка HTTP при отправке фото для {phone}: "
-            f"статус {e.response.status_code}, фото: {image_url}, ошибка: {e}"
+            f"[send_whatsapp_image] Ошибка HTTP при отправке файла для {phone}: "
+            f"статус {e.response.status_code}, файл: {file_url}, ошибка: {e}"
         )
         return False
     except Exception as e:
         logger.error(
-            f"[send_whatsapp_image] Ошибка отправки фото для {phone}: {e}, "
-            f"photo: {image_url}"
+            f"[send_whatsapp_image] Ошибка отправки файла для {phone}: {e}, "
+            f"file: {file_url}"
         )
         return False
 

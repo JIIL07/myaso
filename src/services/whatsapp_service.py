@@ -34,30 +34,32 @@ async def send_message(recipient: str, message: str) -> bool:
         return False
 
 
-async def send_image(recipient: str, image_url: str, caption: Optional[str] = None) -> bool:
-    """Отправляет изображение через WhatsApp API.
+async def send_image(recipient: str, file_url: str, caption: Optional[str] = None, extension: str = "png") -> bool:
+    """Отправляет файл через WhatsApp API.
 
     Args:
         recipient: Номер телефона получателя
-        image_url: URL изображения
-        caption: Подпись к изображению (опционально)
+        file_url: URL файла
+        caption: Подпись к файлу (опционально)
+        extension: Тип файла (по умолчанию "png")
 
     Returns:
-        True если изображение отправлено успешно, False иначе
+        True если файл отправлен успешно, False иначе
     """
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
             response = await client.post(
-                settings.whatsapp.send_image_url,
+                settings.whatsapp.send_file_url,
                 json={
                     "recipient": recipient,
-                    "image_url": image_url,
+                    "file_url": file_url,
                     "caption": caption or "",
+                    "extension": extension,
                 },
             )
             response.raise_for_status()
             return True
     except Exception as e:
-        logger.error(f"Ошибка отправки изображения в WhatsApp для {recipient}: {e}")
+        logger.error(f"Ошибка отправки файла в WhatsApp для {recipient}: {e}")
         return False
 
