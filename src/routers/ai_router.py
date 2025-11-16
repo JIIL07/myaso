@@ -205,7 +205,7 @@ async def init_conversation_background(request: InitConverastionRequest):
                     file_extension = file_extension.lstrip('.')
                 else:
                     # Если расширение не найдено, пытаемся определить по параметрам URL или используем pdf по умолчанию
-                    file_extension = "pdf"
+                    file_extension = "xlsx"
                 
                 # Приводим расширение к нижнему регистру для совместимости
                 file_extension = file_extension.lower()
