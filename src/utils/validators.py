@@ -13,6 +13,7 @@ from src.config.constants import (
     ALLOWED_SQL_OPERATORS,
     DANGEROUS_SQL_KEYWORDS,
     FORBIDDEN_SQL_PATTERNS,
+    SQL_KEYWORDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,15 +70,9 @@ def validate_sql_conditions(sql_conditions: str) -> None:
 
     potential_columns = re.findall(column_pattern, sql_without_strings.lower())
 
-    sql_keywords = {
-        'where', 'and', 'or', 'not', 'is', 'null', 'in', 'between', 'like', 'ilike',
-        'true', 'false', 'current_date', 'current_timestamp', 'now', 'lower', 'upper', 'trim',
-        'string',
-    }
-
     used_columns = set()
     for col in potential_columns:
-        if col in sql_keywords:
+        if col in SQL_KEYWORDS:
             continue
         if col.replace('_', '').replace('.', '').isdigit():
             continue
