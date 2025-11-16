@@ -1,5 +1,7 @@
 import logging
+import os
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, BackgroundTasks
 from supabase import AClient
@@ -12,10 +14,11 @@ from src.models import (
     ResetConversationRequest,
     UserMessageRequest,
 )
-from src.services.whatsapp_service import send_message
+from src.services.whatsapp_service import send_image, send_message
 from src.utils import get_supabase_client, remove_markdown_symbols
 from src.utils.memory import SupabaseConversationMemory
 from src.utils.phone_validator import normalize_phone, validate_phone
+from src.utils.prompts import get_system_value
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +187,55 @@ async def init_conversation_background(request: InitConverastionRequest):
             )
             raise
 
+        # Отправка прайс-листа после текста и фото
+        try:
+            pricelist_url = await get_system_value("Прайс-лист")
+            if pricelist_url:
+                logger.info(
+                    f"[initConversation] Найден прайс-лист для {request.client_phone}: {pricelist_url}"
+                )
+                
+                # Определяем расширение файла из URL
+                parsed_url = urlparse(pricelist_url)
+                file_path = parsed_url.path
+                _, file_extension = os.path.splitext(file_path)
+                
+                # Убираем точку из расширения, если есть
+                if file_extension:
+                    file_extension = file_extension.lstrip('.')
+                else:
+                    # Если расширение не найдено, пытаемся определить по параметрам URL или используем pdf по умолчанию
+                    file_extension = "pdf"
+                
+                # Приводим расширение к нижнему регистру для совместимости
+                file_extension = file_extension.lower()
+                
+                # Отправляем прайс-лист как файл
+                send_file_success = await send_image(
+                    recipient=request.client_phone,
+                    file_url=pricelist_url,
+                    caption="Прайс-лист",
+                    extension=file_extension,
+                )
+                
+                if send_file_success:
+                    logger.info(
+                        f"[initConversation] Прайс-лист успешно отправлен для {request.client_phone}"
+                    )
+                else:
+                    logger.warning(
+                        f"[initConversation] Не удалось отправить прайс-лист для {request.client_phone}"
+                    )
+            else:
+                logger.info(
+                    f"[initConversation] Прайс-лист не найден в system table для {request.client_phone}"
+                )
+        except Exception as pricelist_error:
+            logger.error(
+                f"[initConversation] Ошибка при отправке прайс-листа для {request.client_phone}: {pricelist_error}",
+                exc_info=True,
+            )
+            # Не прерываем выполнение, так как основное сообщение уже отправлено
 
         return {"success": True}
 

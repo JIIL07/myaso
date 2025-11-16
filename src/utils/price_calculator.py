@@ -126,23 +126,16 @@ def calculate_final_price(
         order_price_kg: Базовая цена за кг из БД (может быть None, 0, float, или строка)
         system_vars: Словарь системных переменных (topic -> value)
         supplier_name: Название поставщика (опционально). Если поставщик "ООО "КИТ"", 
-                       финальная цена не рассчитывается
+                       цена возвращается из БД без изменений (без наценок)
     
     Returns:
         Финальная цена как строка:
         - "Цена по запросу" если order_price_kg == 0, None, или пустая строка
-        - "Цена по запросу" если поставщик "ООО "КИТ""
-        - Иначе: строка с ценой, округленной до 2 знаков (например, "385.00")
+        - Цена из БД без изменений (округленная до 2 знаков) если поставщик "ООО "КИТ"" и цена есть
+        - Иначе: строка с ценой с учетом наценок, округленной до 2 знаков (например, "385.00")
     """
     try:
-        # Если поставщик "ООО "КИТ"", не рассчитываем финальную цену
-        if supplier_name:
-            supplier_normalized = supplier_name.upper().strip()
-            # Проверяем разные варианты написания: "ООО КИТ", "ООО"КИТ"", "КИТ"
-            if "КИТ" in supplier_normalized and ("ООО" in supplier_normalized or supplier_normalized.startswith("КИТ")):
-                logger.debug(f"Поставщик {supplier_name} - ООО КИТ, финальная цена не рассчитывается")
-                return "Цена по запросу"
-        
+        # Проверяем наличие цены в БД
         if order_price_kg is None:
             return "Цена по запросу"
         
@@ -159,6 +152,15 @@ def calculate_final_price(
         
         if order_price_kg_float == 0:
             return "Цена по запросу"
+        
+        # Если поставщик "ООО "КИТ"", возвращаем цену из БД без изменений (без наценок)
+        if supplier_name:
+            supplier_normalized = supplier_name.upper().strip()
+            # Проверяем разные варианты написания: "ООО КИТ", "ООО"КИТ"", "КИТ"
+            if "КИТ" in supplier_normalized and ("ООО" in supplier_normalized or supplier_normalized.startswith("КИТ")):
+                logger.debug(f"Поставщик {supplier_name} - ООО КИТ, возвращаем цену из БД без изменений: {order_price_kg_float}")
+                final_price_rounded = round(order_price_kg_float, 2)
+                return f"{final_price_rounded:.2f}"
         
         markup_percentage, markup_absolute = get_markup_from_system_vars(
             order_price_kg_float, system_vars
