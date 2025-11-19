@@ -23,90 +23,17 @@ HTTP_TIMEOUT_SECONDS = 10.0
 DB_CONNECTION_TIMEOUT = 10.0
 DB_COMMAND_TIMEOUT = 30.0
 
+# Опасные SQL операции, которые запрещены
+# Проверяется только наличие этих ключевых слов - все остальное разрешено
 DANGEROUS_SQL_KEYWORDS = [
     "DROP",
+    "TRUNCATE",
     "DELETE",
-    "UPDATE",
     "INSERT",
+    "EXECUTE",
+    "EXEC",
+    # Также запрещаем UPDATE и ALTER для безопасности
+    "UPDATE",
     "ALTER",
     "CREATE",
-    "TRUNCATE",
-    "EXEC",
-    "EXECUTE",
 ]
-
-FORBIDDEN_SQL_PATTERNS = [
-    "information_schema",
-    "pg_catalog",
-    "pg_",
-    "myaso.products",
-    "::text",
-    "::int",
-    "::varchar",
-    "CAST(",
-    "CONVERT(",
-]
-
-ALLOWED_SQL_COLUMNS = {
-    "id",
-    "title",
-    "supplier_name",
-    "from_region",
-    "photo",
-    "pricelist_date",
-    "package_weight",
-    "order_price_kg",
-    "discount",
-    "ready_made",
-    "package_type",
-    "cooled_or_frozen",
-    "product_in_package",
-}
-
-ALLOWED_SQL_OPERATORS = {
-    "=", "!=", "<>", "<", ">", "<=", ">=",
-    "AND", "OR", "NOT",
-    "IS NULL", "IS NOT NULL",
-    "ILIKE", "LIKE",
-    "IN", "NOT IN",
-    "BETWEEN", "NOT BETWEEN",
-}
-
-ALLOWED_SQL_FUNCTIONS = {
-    "CURRENT_DATE",
-    "CURRENT_TIMESTAMP",
-    "NOW()",
-    "LOWER",
-    "UPPER",
-    "TRIM",
-}
-
-SQL_KEYWORDS = {
-    "where",
-    "and",
-    "or",
-    "not",
-    "is",
-    "null",
-    "in",
-    "between",
-    "like",
-    "ilike",
-    "true",
-    "false",
-    "current_date",
-    "current_timestamp",
-    "now",
-    "lower",
-    "upper",
-    "trim",
-    "string",
-    "limit",
-    "offset",
-    "order",
-    "by",
-    "asc",
-    "desc",
-    "group",
-    "having",
-}

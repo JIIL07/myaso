@@ -1,14 +1,13 @@
 """LangChain Tools для агентов."""
 
 from .product_tools import vector_search, get_random_products
-from .sql_tools import execute_sql_request, create_sql_tools
+from .sql_tools import create_sql_tools
 from .client_tools import get_client_profile, get_client_orders
 from .media_tools import create_media_tools
 
 __all__ = [
     "vector_search",
     "get_random_products",
-    "execute_sql_request",
     "create_sql_tools",
     "get_client_profile",
     "get_client_orders",

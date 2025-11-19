@@ -116,7 +116,7 @@ async def get_random_products(limit: int = 10, require_photo: bool = False) -> s
 
     ИСПОЛЬЗУЙ ТОЛЬКО КОГДА:
     - vector_search вернул "Товары по вашему запросу не найдены"
-    - execute_sql_request вернул "Товары по указанным условиям не найдены"
+    - execute_sql_query вернул "Товары по указанным условиям не найдены" или "По указанному запросу ничего не найдено"
     - Все остальные инструменты поиска не дали результатов
     - Нужно показать примеры товаров из ассортимента когда ничего не найдено
 
@@ -137,19 +137,12 @@ async def get_random_products(limit: int = 10, require_photo: bool = False) -> s
         limit = 20
 
     try:
-        json_result = await get_random_products_db(limit * 3 if require_photo else limit)
+        json_result = await get_random_products_db(limit, require_photo)
 
         if not json_result:
-            return "Товары не найдены."
-
-        if require_photo:
-            json_result = [
-                product for product in json_result
-                if product.get('photo') and product.get('photo').strip()
-            ]
-            if not json_result:
+            if require_photo:
                 return "Товары с фотографиями не найдены."
-            json_result = json_result[:limit]
+            return "Товары не найдены."
 
         products_list = []
         product_ids = []

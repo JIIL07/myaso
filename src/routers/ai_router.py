@@ -132,15 +132,15 @@ async def init_conversation_background(request: InitConverastionRequest):
 - Если it_is_friend=TRUE - обращайся на "ты", если FALSE - на "вы"
 
 ШАГ 2: Найди товары с фото
-- Используй generate_sql_from_text + execute_sql_request для поиска товаров
-- ВАЖНО: Используй параметр require_photo=True в execute_sql_request!
-- Правильный вызов: execute_sql_request(sql_conditions="...", require_photo=True)
+- Используй generate_sql_from_text + execute_sql_query для поиска товаров
+- ВАЖНО: Используй параметр require_photo=True в execute_sql_query!
+- Правильный вызов: execute_sql_query(sql_query="...", require_photo=True)
 - Это гарантирует, что будут найдены ТОЛЬКО товары с фотографиями
 - Найди ТОЧНО 2 товара с фото (или столько, сколько есть, если меньше 2)
 - Для каждого товара рассчитай финальную цену по правилам из промпта
 
 ШАГ 3: ОБЯЗАТЕЛЬНО отправь фото товаров!
-- После того как execute_sql_request вернул товары, найди в ответе инструмента секцию [PRODUCT_IDS]
+- После того как execute_sql_query вернул товары, найди в ответе инструмента секцию [PRODUCT_IDS]
 - Формат секции: [PRODUCT_IDS]{{"product_ids": [123, 456]}}[/PRODUCT_IDS]
 - Извлеки числа из массива product_ids (это ID товаров)
 - Возьми первые 2 ID из этого массива (например, если [123, 456, 789], то возьми [123, 456])
@@ -160,7 +160,7 @@ async def init_conversation_background(request: InitConverastionRequest):
 ПРИМЕР ПОЛНОГО ЦИКЛА:
 1. get_client_profile(phone="{request.client_phone}")
 2. generate_sql_from_text(text_conditions="найди товары с фото")
-3. execute_sql_request(sql_conditions="...", require_photo=True)
+3. execute_sql_query(sql_query="...", require_photo=True)
 4. show_product_photos(product_ids=[123, 456])
 5. Сформируй приветственное сообщение с информацией о товарах
 
