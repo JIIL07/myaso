@@ -133,6 +133,7 @@ async def init_conversation_background(request: InitConverastionRequest):
 
 ШАГ 2: Найди товары
 - Используй generate_sql_from_text + execute_sql_query для поиска товаров
+- При вызове execute_sql_query укажи limit
 - Найди ТОЧНО 2 товара (или столько, сколько есть, если меньше 2)
 - Для каждого товара рассчитай финальную цену по правилам из промпта
 
