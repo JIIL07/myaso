@@ -148,7 +148,9 @@ async def _generate_sql_from_text_impl(
        - Явно указывай схему myaso: myaso.products, myaso.price_history
        - НЕ используй алиасы таблиц (p, ph и т.д.) - обращайся к колонкам напрямую через myaso.products.column
        - Запрос должен возвращать колонки из myaso.products (обязательно id)
-       - Пример: "SELECT myaso.products.* FROM myaso.products JOIN myaso.price_history ON myaso.products.title = myaso.price_history.product WHERE ..."
+       - ВАЖНО: При JOIN с price_history ВСЕГДА используй DISTINCT или EXISTS, так как в price_history может быть несколько записей для одного товара
+       - Пример с DISTINCT: "SELECT DISTINCT myaso.products.* FROM myaso.products JOIN myaso.price_history ON myaso.products.title = myaso.price_history.product WHERE ..."
+       - Пример с EXISTS: "SELECT myaso.products.* FROM myaso.products WHERE EXISTS (SELECT 1 FROM myaso.price_history WHERE myaso.price_history.product = myaso.products.title AND ...)"
 
     4. ОБЩИЕ ПРАВИЛА:
        - Используй ТОЛЬКО колонки из списка выше! Никаких других колонок не существует!
@@ -318,8 +320,7 @@ def create_sql_tools(is_init_message: bool = False):
     @tool
     async def execute_sql_query(
         sql_query: str, 
-        limit: int = DEFAULT_SQL_LIMIT, 
-        require_photo: bool = False
+        limit: int = DEFAULT_SQL_LIMIT
     ) -> str:
         """
         Универсальный инструмент для выполнения ЛЮБЫХ SQL SELECT запросов.
@@ -339,14 +340,9 @@ def create_sql_tools(is_init_message: bool = False):
         4. НЕ используй алиасы таблиц (p, ph и т.д.) — обращайся к колонкам напрямую (myaso.products.title).
         5. Запрос обязан возвращать товары (таблица myaso.products) и иметь колонку id.
 
-    ПАРАМЕТР require_photo:
-        - require_photo=True: Возвращает только товары с фотографиями
-        - require_photo=False: Возвращает все товары независимо от наличия фото
-
     Args:
             sql_query: SQL запрос (WHERE условия или полный SELECT запрос)
         limit: Максимальное количество товаров для возврата (по умолчанию 50)
-        require_photo: Если True, возвращает только товары с фотографиями (по умолчанию False)
 
     Returns:
             Список найденных товаров с ID в секции [PRODUCT_IDS]
@@ -369,23 +365,6 @@ def create_sql_tools(is_init_message: bool = False):
         if is_full_query:
             final_query = sql_query_clean
 
-            if require_photo:
-                if re.search(r'\bWHERE\b', final_query, re.IGNORECASE):
-                    final_query = re.sub(
-                        r'(\bWHERE\b.*?)(\s+\bLIMIT\b|;|\Z)',
-                        lambda m: f"{m.group(1)} AND myaso.products.photo IS NOT NULL AND myaso.products.photo != ''{m.group(2) if m.group(2) else ''}",
-                        final_query,
-                        flags=re.IGNORECASE | re.DOTALL
-                    )
-                else:
-                    final_query = re.sub(
-                        r'(\s+\bLIMIT\b|;|\Z)',
-                        lambda m: f" WHERE myaso.products.photo IS NOT NULL AND myaso.products.photo != ''{m.group(1) if m.group(1) else ''}",
-                        final_query,
-                        flags=re.IGNORECASE
-                    )
-                logger.info(f"[execute_sql_query] Добавлен фильтр по фото для полного запроса")
-
             upper_sql = final_query.upper()
             if not re.search(r'\bLIMIT\s+\d+\b', upper_sql, re.IGNORECASE):
                 final_query = f"{final_query} LIMIT {limit}"
@@ -407,14 +386,6 @@ def create_sql_tools(is_init_message: bool = False):
             has_more = False
         else:
             sql_conditions = sql_query_clean
-
-            if require_photo:
-                photo_condition = "photo IS NOT NULL AND photo != ''"
-                if sql_conditions:
-                    sql_conditions = "({}) AND {}".format(sql_conditions, photo_condition)
-                else:
-                    sql_conditions = photo_condition
-                logger.info(f"[execute_sql_query] Добавлен фильтр по фото. Финальные условия: {sql_conditions[:200]}")
 
             try:
                 validate_sql_conditions(sql_conditions)
@@ -448,7 +419,6 @@ def create_sql_tools(is_init_message: bool = False):
             supplier = normalize_field_value(product.get("supplier_name"), "text")
             order_price = product.get("order_price_kg")
             region = normalize_field_value(product.get("from_region"), "text")
-            has_photo = bool(product.get("photo") and product.get("photo").strip())
             
             final_price = calculate_final_price(order_price, system_vars, supplier_name=supplier)
             
@@ -459,8 +429,6 @@ def create_sql_tools(is_init_message: bool = False):
             else:
                 product_lines.append(f"   Цена: {final_price}")
             product_lines.append(f"   Регион: {region}")
-            if require_photo and has_photo:
-                product_lines.append(f"   📷 Есть фото")
             
             products_list.append("\n".join(product_lines))
 
@@ -469,12 +437,10 @@ def create_sql_tools(is_init_message: bool = False):
         ids_section = f"\n\n[PRODUCT_IDS]{ids_json}[/PRODUCT_IDS]" if ids_json else ""
 
         if is_full_query:
-            photo_note = " (только с фото)" if require_photo else ""
-            return f"Найдено строк: {len(json_result)}{photo_note}\n\n{result_text}{ids_section}"
+            return f"Найдено строк: {len(json_result)}\n\n{result_text}{ids_section}"
         else:
             more_text = "\n\n⚠️ В базе данных есть ещё товары, показываем первые 50. Используйте более конкретные критерии поиска для уточнения." if has_more else ""
-        photo_note = " (только с фото)" if require_photo else ""
-        return f"Найдено товаров: {len(json_result)}{photo_note}{more_text}\n\n{result_text}{ids_section}"
+        return f"Найдено товаров: {len(json_result)}{more_text}\n\n{result_text}{ids_section}"
 
     return [generate_sql_from_text, execute_sql_query]
 
