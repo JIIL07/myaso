@@ -6,12 +6,11 @@ from src.database import get_pool
 from src.utils import records_to_json
 
 
-async def get_random_products(limit: int = 10, require_photo: bool = False) -> List[Dict[str, Any]]:
+async def get_random_products(limit: int = 10) -> List[Dict[str, Any]]:
     """Получает случайные товары из ассортимента.
 
     Args:
         limit: Количество товаров для возврата (максимум 20)
-        require_photo: Если True, возвращает только товары с фотографиями
 
     Returns:
         Список словарей с данными товаров
@@ -22,39 +21,21 @@ async def get_random_products(limit: int = 10, require_photo: bool = False) -> L
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
-            if require_photo:
-                result = await conn.fetch(
-                    """
-                    SELECT
-                        id,
-                        title,
-                        supplier_name,
-                        from_region,
-                        photo,
-                        order_price_kg
-                    FROM myaso.products
-                    WHERE photo IS NOT NULL AND photo != ''
-                    ORDER BY RANDOM()
-                    LIMIT $1
-                    """,
-                    limit,
-                )
-            else:
-                result = await conn.fetch(
-                    """
-                    SELECT
-                        id,
-                        title,
-                        supplier_name,
-                        from_region,
-                        photo,
-                        order_price_kg
-                    FROM myaso.products
-                    ORDER BY RANDOM()
-                    LIMIT $1
-                    """,
-                    limit,
-                )
+            result = await conn.fetch(
+                """
+                SELECT
+                    id,
+                    title,
+                    supplier_name,
+                    from_region,
+                    photo,
+                    order_price_kg
+                FROM myaso.products
+                ORDER BY RANDOM()
+                LIMIT $1
+                """,
+                limit,
+            )
             return records_to_json(result)
     except Exception as e:
         raise RuntimeError(f"Ошибка при получении случайных товаров: {e}") from e
@@ -75,8 +56,6 @@ async def get_products_by_sql_conditions(
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
-            # Используем форматирование с двойными фигурными скобками для безопасности
-            # чтобы избежать проблем, если sql_conditions содержит фигурные скобки
             query = """
                 SELECT
                     id,
