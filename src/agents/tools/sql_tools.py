@@ -15,7 +15,6 @@ from langchain_openai import ChatOpenAI
 from src.config.constants import (
     DANGEROUS_SQL_KEYWORDS,
     DEFAULT_SQL_LIMIT,
-    MAX_SQL_RETRY_ATTEMPTS,
     TEXT_TO_SQL_TEMPERATURE,
 )
 from src.config.settings import settings
