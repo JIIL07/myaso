@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 @tool
-async def vector_search(query: str) -> str:
+async def vector_search(query: str, require_photo: bool = False) -> str:
     """Семантический поиск товаров по текстовому запросу (векторный поиск).
 
     НАЗНАЧЕНИЕ: Семантический поиск товаров по текстовому запросу (векторный поиск)
@@ -32,6 +32,7 @@ async def vector_search(query: str) -> str:
 
     Args:
         query: Текстовый запрос пользователя о товарах
+        require_photo: Если True, возвращает только товары с фотографиями
 
     Returns:
         Список найденных товаров (до 50) с ID в секции [PRODUCT_IDS]
@@ -46,6 +47,15 @@ async def vector_search(query: str) -> str:
 
     if not documents:
         return "Товары по вашему запросу не найдены."
+
+    # Фильтрация по наличию фото, если требуется
+    if require_photo:
+        documents = [
+            doc for doc in documents
+            if doc.metadata.get('photo') and str(doc.metadata.get('photo')).strip()
+        ]
+        if not documents:
+            return "Товары с фотографиями по вашему запросу не найдены."
 
     has_more = len(documents) > VECTOR_SEARCH_LIMIT
     documents = documents[:VECTOR_SEARCH_LIMIT]
