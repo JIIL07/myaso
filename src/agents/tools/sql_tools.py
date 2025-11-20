@@ -132,24 +132,18 @@ async def _generate_sql_from_text_impl(
     ПРАВИЛА ГЕНЕРАЦИИ SQL:
 
     1. ВЫБОР ТИПА ЗАПРОСА:
-       - Если запрос простой (только фильтрация по таблице products) -> генерируй ТОЛЬКО WHERE условия (без SELECT/FROM)
-       - Если нужен JOIN с price_history или сложные подзапросы -> генерируй ПОЛНЫЙ SELECT запрос
+       - Если запрос простой (только фильтрация по таблице) -> генерируй ТОЛЬКО WHERE условия (без SELECT/FROM)
+       - Если нужен JOIN  или сложные подзапросы -> генерируй ПОЛНЫЙ SELECT запрос
 
     2. ДЛЯ WHERE УСЛОВИЙ (простой запрос):
        - Генерируй ТОЛЬКО условия, БЕЗ SELECT/FROM/WHERE
-       - Пример: "supplier_name = 'ООО КИТ' AND order_price_kg < 100"
        - Используй ТОЛЬКО колонки из таблицы products
-       - НЕ используй алиасы таблиц и схем
-       - В подзапросах также НЕ используй алиасы - используй простые имена колонок
 
     3. ДЛЯ ПОЛНОГО SELECT ЗАПРОСА (сложный запрос с JOIN/подзапросами):
        - Генерируй ПОЛНЫЙ SELECT запрос: SELECT ... FROM myaso.products JOIN myaso.price_history ...
        - Явно указывай схему myaso: myaso.products, myaso.price_history
-       - НЕ используй алиасы таблиц (p, ph и т.д.) - обращайся к колонкам напрямую через myaso.products.column
        - Запрос должен возвращать колонки из myaso.products (обязательно id)
        - ВАЖНО: При JOIN с price_history ВСЕГДА используй DISTINCT или EXISTS, так как в price_history может быть несколько записей для одного товара
-       - Пример с DISTINCT: "SELECT DISTINCT myaso.products.* FROM myaso.products JOIN myaso.price_history ON myaso.products.title = myaso.price_history.product WHERE ..."
-       - Пример с EXISTS: "SELECT myaso.products.* FROM myaso.products WHERE EXISTS (SELECT 1 FROM myaso.price_history WHERE myaso.price_history.product = myaso.products.title AND ...)"
 
     4. ОБЩИЕ ПРАВИЛА:
        - Используй ТОЛЬКО колонки из списка выше! Никаких других колонок не существует!
@@ -290,18 +284,12 @@ def create_sql_tools(is_init_message: bool = False):
         - Числовые условия по СКИДКЕ
         - Комбинации числовых условий
         - Поиск всех товаров от поставщика
-        - Запросы с JOIN price_history (сравнение цен, история цен)
+        - Запросы с JOIN
         - Сложные подзапросы
-        - Пустые запросы или init_conversation
 
         ВАЖНО - НЕ ИСПОЛЬЗУЙ АЛИАСЫ:
-        - НЕ используй: products.title, myaso.products.title, p.title, t.column
-        - НЕ используй ключевое слово AS для алиасов
         - Для WHERE условий: используй простые имена колонок (title, order_price_kg)
         - Для полных SELECT: используй полные имена (myaso.products.title, myaso.price_history.price)
-        - Примеры ПРАВИЛЬНО: 
-          * WHERE: "title = 'Грудинка' AND order_price_kg < 100"
-          * SELECT: "SELECT myaso.products.* FROM myaso.products JOIN myaso.price_history ..."
 
         Args:
             text_conditions: Текстовое описание условий на русском языке
@@ -325,9 +313,8 @@ def create_sql_tools(is_init_message: bool = False):
         Универсальный инструмент для выполнения ЛЮБЫХ SQL SELECT запросов.
 
         ПРИНИМАЕТ:
-        - WHERE условия (например: "supplier_name = 'ООО КИТ' AND order_price_kg < 100")
-        - Полные SELECT запросы (например: "SELECT * FROM myaso.products JOIN myaso.price_history ...")
-
+        - WHERE условия
+        - Полные SELECT запросы
         АВТОМАТИЧЕСКИ ОПРЕДЕЛЯЕТ тип запроса:
         - Если начинается с SELECT -> выполняет как полный запрос
         - Если НЕ начинается с SELECT -> оборачивает в SELECT ... FROM myaso.products WHERE ...
@@ -335,9 +322,6 @@ def create_sql_tools(is_init_message: bool = False):
         ВАЖНО:
         1. Используй ТОЛЬКО SELECT запросы!
         2. НЕ используй DROP/DELETE/UPDATE/INSERT/ALTER/CREATE/TRUNCATE/EXECUTE — они запрещены.
-        3. Явно указывай схему myaso: например, myaso.products, myaso.price_history.
-        4. НЕ используй алиасы таблиц (p, ph и т.д.) — обращайся к колонкам напрямую (myaso.products.title).
-        5. Запрос обязан возвращать товары (таблица myaso.products) и иметь колонку id.
 
     Args:
             sql_query: SQL запрос (WHERE условия или полный SELECT запрос)

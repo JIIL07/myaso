@@ -18,7 +18,7 @@ from src.services.whatsapp_service import send_image, send_message
 from src.utils import get_supabase_client, remove_markdown_symbols
 from src.utils.memory import SupabaseConversationMemory
 from src.utils.phone_validator import normalize_phone, validate_phone
-from src.utils.prompts import get_system_value
+from src.utils.prompts import get_prompt, get_system_value
 
 logger = logging.getLogger(__name__)
 
@@ -122,48 +122,24 @@ async def init_conversation_background(request: InitConverastionRequest):
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
 
-        welcome_input = f"""Сформируй короткое дружелюбное приветствие для клиента.
-
-ВАЖНО: Это init_conversation - инициализация разговора. Ты ДОЛЖЕН выполнить ВСЕ шаги ниже:
-
-ШАГ 1: Получи профиль клиента
-- Вызови get_client_profile(phone="{request.client_phone}")
-- Проверь статус дружбы клиента (it_is_friend) в профиле
-- Если it_is_friend=TRUE - обращайся на "ты", если FALSE - на "вы"
-
-ШАГ 2: Найди товары
-- Используй generate_sql_from_text + execute_sql_query для поиска товаров
-- При вызове execute_sql_query укажи limit
-- Для каждого товара рассчитай финальную цену по правилам из промпта
-
-ШАГ 3: Отправь фото товаров (если есть)
-- После того как execute_sql_query вернул товары, найди в ответе инструмента секцию [PRODUCT_IDS]
-- Формат секции: [PRODUCT_IDS]{{"product_ids": [123, 456]}}[/PRODUCT_IDS]
-- Извлеки числа из массива product_ids (это ID товаров)
-- Возьми товары по limit ID из этого массива (например, если [123, 456, 789], то возьми [123, 456])
-- ВЫЗОВИ инструмент show_product_photos с этими ID:
-  show_product_photos(product_ids=[123, 456])
-- Инструмент show_product_photos автоматически отправит фото только для тех товаров, у которых есть фотографии
-- Если у товара нет фото, оно не будет отправлено, но товар всё равно будет показан в текстовом сообщении
-
-ШАГ 4: Сформируй приветственное сообщение
-- Дружелюбное приветствие с учетом статуса дружбы (ты/вы)
-- Краткое введение: "Предлагаю вам актуальные позиции из нашего ассортимента:"
-- Для каждого из найденных товаров укажи:
-  * Название товара (title) - ТОЧНО как в базе данных
-  * Поставщик (supplier_name): "Поставщик: {{supplier_name}}"
-  * Регион происхождения (from_region): "Регион: {{from_region}}"
-  * Финальная цена за килограм (РАССЧИТАННАЯ): "Цена: {{final_price_kg:.2f}} р/кг" или "Цена: по запросу" если цена = 0
-
-ПРИМЕР ПОЛНОГО ЦИКЛА:
-1. get_client_profile(phone="{request.client_phone}")
-2. generate_sql_from_text(text_conditions="найди товары")
-3. execute_sql_query(sql_query="...")
-4. show_product_photos(product_ids=[123, 456])  # Отправит фото только если они есть у товаров
-5. Сформируй приветственное сообщение с информацией о товарах
-
-Поприветствуй дружелюбно со смайликами, будь позитивным и энергичным.
-"""
+        # Загружаем промпт из БД по topic "Вступительное сообщение" для init_conversation
+        # request.topic используется для других целей (например, в agent.run для загрузки системного промпта)
+        prompt_topic = "Вступительное сообщение"
+        welcome_input = await get_prompt(prompt_topic)
+        
+        if not welcome_input:
+            logger.warning(
+                f"[initConversation] Промпт для topic '{prompt_topic}' не найден в БД для {request.client_phone}. "
+                f"Используется пустой промпт."
+            )
+            welcome_input = ""
+        else:
+            # Подставляем номер телефона клиента в промпт, если там есть плейсхолдер
+            welcome_input = welcome_input.replace("{client_phone}", request.client_phone)
+            logger.info(
+                f"[initConversation] Загружен промпт из БД для topic '{prompt_topic}' для {request.client_phone}. "
+                f"Длина промпта: {len(welcome_input)} символов"
+            )
 
         response_text = await agent.run(
             user_input=welcome_input,
@@ -193,22 +169,17 @@ async def init_conversation_background(request: InitConverastionRequest):
                     f"[initConversation] Найден прайс-лист для {request.client_phone}: {pricelist_url}"
                 )
                 
-                # Определяем расширение файла из URL
                 parsed_url = urlparse(pricelist_url)
                 file_path = parsed_url.path
                 _, file_extension = os.path.splitext(file_path)
                 
-                # Убираем точку из расширения, если есть
                 if file_extension:
                     file_extension = file_extension.lstrip('.')
                 else:
-                    # Если расширение не найдено, пытаемся определить по параметрам URL или используем pdf по умолчанию
                     file_extension = "xlsx"
                 
-                # Приводим расширение к нижнему регистру для совместимости
                 file_extension = file_extension.lower()
                 
-                # Отправляем прайс-лист как файл
                 send_file_success = await send_image(
                     recipient=request.client_phone,
                     file_url=pricelist_url,
