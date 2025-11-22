@@ -22,6 +22,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 
 from src.config.constants import (
+    AGENT_RECURSION_LIMIT,
     DEFAULT_TEMPERATURE,
     MAX_AGENT_EXECUTION_TIME,
     MAX_AGENT_ITERATIONS,
@@ -546,6 +547,9 @@ class ProductAgent(BaseAgent):
                 },
                 "run_name": trace_name,
                 "tags": ["product_agent", "conversation", trace_name],
+                # Устанавливаем лимит рекурсии для LangGraph
+                # Это предотвращает ошибку "Recursion limit reached"
+                "recursion_limit": AGENT_RECURSION_LIMIT,
             }
 
             messages = []
