@@ -7,7 +7,6 @@ import logging
 
 from langchain_core.tools import tool
 
-from src.config.constants import VECTOR_SEARCH_LIMIT
 from src.database.queries.products_queries import (
     get_random_products as get_random_products_db,
 )
@@ -35,12 +34,14 @@ async def vector_search(query: str, require_photo: bool = False) -> str:
         require_photo: Если True, возвращает только товары с фотографиями
 
     Returns:
-        Список найденных товаров (до 50) с ID в секции [PRODUCT_IDS]
+        Список найденных товаров с ID в секции [PRODUCT_IDS]
     """
     retriever = SupabaseVectorRetriever()
 
     try:
-        documents = await retriever.get_relevant_documents(query, k=VECTOR_SEARCH_LIMIT + 1)
+        # Получаем до 250 товаров для фильтрации по фото
+        # Сортировка по релевантности сохраняется в SQL запросе
+        documents = await retriever.get_relevant_documents(query, k=250)
     except Exception as e:
         logger.error(f"Ошибка при поиске по запросу '{query}': {e}", exc_info=True)
         return "Товары по вашему запросу не найдены."
@@ -48,18 +49,18 @@ async def vector_search(query: str, require_photo: bool = False) -> str:
     if not documents:
         return "Товары по вашему запросу не найдены."
 
-    # Фильтрация по наличию фото, если требуется
+    # Фильтрация по наличию фото ДО обработки результатов (если требуется)
+    # Сортировка по релевантности (distance) сохраняется, так как документы уже отсортированы
     if require_photo:
         documents = [
             doc for doc in documents
-            if doc.metadata.get('photo') and str(doc.metadata.get('photo')).strip()
+            if doc.metadata.get('photo')
         ]
         if not documents:
             return "Товары с фотографиями по вашему запросу не найдены."
 
-    has_more = len(documents) > VECTOR_SEARCH_LIMIT
-    documents = documents[:VECTOR_SEARCH_LIMIT]
-
+    # Лимиты управляются через SYSTEM_PROMPT из БД, не ограничиваем здесь
+    # Агент сам выберет самые релевантные товары из отсортированного списка
     products_list = []
     product_ids = []
     
@@ -89,7 +90,7 @@ async def vector_search(query: str, require_photo: bool = False) -> str:
         products_list.append("\n".join(product_lines))
 
     result_text = "\n\n".join(products_list)
-    more_text = "\n\n⚠️ В базе данных есть ещё товары, показываем первые 50. Используйте более конкретные критерии поиска для уточнения." if has_more else ""
+    more_text = ""  # Для vector_search more_text не применим
 
     ids_json = json.dumps({"product_ids": product_ids}) if product_ids else ""
     ids_section = f"\n\n[PRODUCT_IDS]{ids_json}[/PRODUCT_IDS]" if ids_json else ""
@@ -110,13 +111,12 @@ async def get_random_products(limit: int = 10) -> str:
     - Нужно показать примеры товаров из ассортимента когда ничего не найдено
 
     Args:
-        limit: Количество товаров для возврата (по умолчанию 10, максимум 20)
+        limit: Количество товаров для возврата (по умолчанию 10)
 
     Returns:
-        Список случайных товаров (до 20) с ID в секции [PRODUCT_IDS]
+        Список случайных товаров с ID в секции [PRODUCT_IDS]
     """
-    if limit > 20:
-        limit = 20
+    # Лимиты управляются через SYSTEM_PROMPT из БД, принимаем любой limit
 
     try:
         json_result = await get_random_products_db(limit)

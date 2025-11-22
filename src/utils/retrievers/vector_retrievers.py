@@ -100,7 +100,8 @@ class SupabaseVectorRetriever(BaseRetriever):
 
         Args:
             query: Текстовый запрос для поиска
-            k: Количество документов для возврата (если None, используется значение из __init__)
+            k: Количество документов для возврата (если None, используется значение из __init__).
+               Если k >= 100000, возвращаются все товары без ограничения.
 
         Returns:
             Список Document объектов с найденными товарами
@@ -110,32 +111,58 @@ class SupabaseVectorRetriever(BaseRetriever):
         return await self._get_relevant_documents(query, k=k)
 
     async def _get_relevant_documents(self, query: str, k: int) -> List[Document]:
-        """Внутренняя реализация получения документов."""
+        """Внутренняя реализация получения документов.
+        
+        Args:
+            query: Текстовый запрос для поиска
+            k: Количество документов для возврата. Если k >= 100000, возвращаются все товары.
+        """
         vector = await self._embed(query)
+
+        # Если k очень большое, получаем все товары без LIMIT
+        use_limit = k < 100000
 
         try:
             pool = await get_pool()
             async with pool.acquire() as conn:
                 vector_str = "[" + ",".join(map(str, vector)) + "]"
 
-                rows: Sequence[asyncpg.Record] = await conn.fetch(
-                    """
-                    SELECT
-                      id,
-                      title,
-                      supplier_name,
-                      from_region,
-                      photo,
-                      order_price_kg,
-                      embedding <-> ($1::vector) AS distance
-                    FROM myaso.products
-                    WHERE embedding IS NOT NULL
-                    ORDER BY embedding <-> ($1::vector)
-                    LIMIT $2
-                    """,
-                    vector_str,
-                    k,
-                )
+                if use_limit:
+                    rows: Sequence[asyncpg.Record] = await conn.fetch(
+                        """
+                        SELECT
+                          id,
+                          title,
+                          supplier_name,
+                          from_region,
+                          photo,
+                          order_price_kg,
+                          embedding <-> ($1::vector) AS distance
+                        FROM myaso.products
+                        WHERE embedding IS NOT NULL
+                        ORDER BY embedding <-> ($1::vector)
+                        LIMIT $2
+                        """,
+                        vector_str,
+                        k,
+                    )
+                else:
+                    rows: Sequence[asyncpg.Record] = await conn.fetch(
+                        """
+                        SELECT
+                          id,
+                          title,
+                          supplier_name,
+                          from_region,
+                          photo,
+                          order_price_kg,
+                          embedding <-> ($1::vector) AS distance
+                        FROM myaso.products
+                        WHERE embedding IS NOT NULL
+                        ORDER BY embedding <-> ($1::vector)
+                        """,
+                        vector_str,
+                    )
         except Exception as e:
             error_type = type(e).__name__
             error_str = str(e)
