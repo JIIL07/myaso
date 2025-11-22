@@ -121,12 +121,7 @@ class ProductAgent(BaseAgent):
                     openai_api_base=settings.openrouter.base_url,
                     temperature=DEFAULT_TEMPERATURE,
                 )
-                logger.info(
-                    f"[ProductAgent] LLM инициализирован: "
-                    f"model={settings.openrouter.model_id}, "
-                    f"base_url={settings.openrouter.base_url}, "
-                    f"temperature={DEFAULT_TEMPERATURE}"
-                )
+                # Не логируем инициализацию LLM - это не важно
             except Exception as e:
                 logger.error(
                     f"[ProductAgent] Ошибка инициализации LLM: {e}",
@@ -265,21 +260,16 @@ class ProductAgent(BaseAgent):
         )
 
         try:
+            # Логируем только начало обработки с ключевой информацией
             logger.info(
-                f"[ProductAgent.run] Начало обработки запроса для {client_phone}, topic: {topic}, "
-                f"user_input (полный): '{user_input}'"
+                f"[ProductAgent.run] Начало обработки для {client_phone}, topic: {topic}"
             )
 
             db_prompt = None
             if topic:
                 try:
                     db_prompt = await get_prompt(topic)
-                    if db_prompt:
-                        logger.info(
-                            f"[ProductAgent.run] Загружен промпт из БД для topic '{topic}': "
-                            f"длина={len(db_prompt)} символов, первые 200 символов: '{db_prompt[:200]}...'"
-                        )
-                    else:
+                    if not db_prompt:
                         logger.warning(f"[ProductAgent.run] Промпт для topic '{topic}' не найден в БД")
                 except Exception as e:
                     logger.error(
@@ -294,16 +284,8 @@ class ProductAgent(BaseAgent):
 
             if db_prompt:
                 base_prompt = db_prompt + f"\n\n{self.DEFAULT_SYSTEM_PROMPT}"
-                logger.info(
-                    f"[ProductAgent.run] Промпт из БД объединен с системным промптом. "
-                    f"Общая длина base_prompt: {len(base_prompt)} символов"
-                )
             else:
                 base_prompt = self.DEFAULT_SYSTEM_PROMPT
-                logger.info(
-                    f"[ProductAgent.run] Используется только системный промпт (промпт из БД не загружен). "
-                    f"Длина: {len(base_prompt)} символов"
-                )
 
             chat_history: List[BaseMessage] = []
             if self.memory is not None:
@@ -316,7 +298,7 @@ class ProductAgent(BaseAgent):
                             {}, return_messages=True
                         )
                         chat_history = memory_vars.get("history", [])
-                        logger.info(f"[ProductAgent.run] Загружено {len(chat_history)} сообщений из памяти для {client_phone}")
+                        # Не логируем загрузку истории - это не важно
                 except Exception as e:
                     logger.error(f"[ProductAgent.run] Не удалось загрузить память: {e}", exc_info=True)
                     chat_history = []
@@ -324,7 +306,7 @@ class ProductAgent(BaseAgent):
             client_is_friend = False
             try:
                 client_is_friend = await get_client_is_friend(client_phone)
-                logger.info(f"[ProductAgent.run] Клиент {client_phone}: is_it_friend={client_is_friend}")
+                # Не логируем статус дружбы - это не важно
             except Exception as e:
                 logger.error(f"[ProductAgent.run] Не удалось получить статус дружбы клиента: {e}", exc_info=True)
 
@@ -334,11 +316,9 @@ class ProductAgent(BaseAgent):
             if len(chat_history) == 1:
                 if isinstance(chat_history[0], AIMessage):
                     is_second_message = True
-                    logger.info(f"[ProductAgent.run] Определено как второе сообщение в разговоре (история: 1 сообщение от ассистента)")
             elif len(chat_history) == 2:
                 if isinstance(chat_history[0], AIMessage) and isinstance(chat_history[1], HumanMessage):
                     is_second_message = True
-                    logger.info(f"[ProductAgent.run] Определено как второе сообщение в разговоре (история: приветствие + ответ)")
 
             client_info_parts = []
             client_info_parts.append(f"Номер телефона: {client_phone}")
@@ -356,13 +336,7 @@ class ProductAgent(BaseAgent):
                 system_vars=system_vars if system_vars else None,
             )
             self.SYSTEM_PROMPT = final_prompt
-            
-            logger.info(
-                f"[ProductAgent.run] Финальный SYSTEM_PROMPT собран и установлен для агента. "
-                f"Длина: {len(final_prompt)} символов. "
-                f"Содержит промпт из БД: {'ДА' if db_prompt else 'НЕТ'}. "
-                f"Первые 300 символов: '{final_prompt[:300]}...'"
-            )
+            # Не логируем детали промпта - это избыточно
 
             context_parts = []
             if client_greeted:
@@ -376,10 +350,7 @@ class ProductAgent(BaseAgent):
             input_with_context = user_input
             if context_parts:
                 input_with_context = user_input + "\n\n" + "\n".join(context_parts)
-            
-            logger.info(
-                f"[ProductAgent.run] Финальный запрос для агента (input_with_context): '{input_with_context}'"
-            )
+            # Не логируем финальный запрос - это избыточно
 
             sql_tools = create_sql_tools(is_init_message=is_init_message)
             media_tools = create_media_tools(client_phone=client_phone, is_init_message=is_init_message)
@@ -394,11 +365,7 @@ class ProductAgent(BaseAgent):
 
                 reasoning_logger = ReasoningLogger(client_phone=client_phone)
                 callbacks_list.append(reasoning_logger)
-
-                logger.info(
-                    f"[ProductAgent.run] Подготовлено {len(callbacks_list)} callbacks: "
-                    f"{[type(cb).__name__ for cb in callbacks_list]}"
-                )
+                # Не логируем детали callbacks - это не важно
 
                 agent_executor = self.create_agent_executor(callbacks=None, tools=agent_tools)
 
@@ -465,35 +432,27 @@ class ProductAgent(BaseAgent):
                             f"LLM вызовов={summary['llm_calls']}, "
                             f"response_length={len(response_text)}"
                         )
-                except Exception as e:
-                    logger.debug(f"[ProductAgent.run] Не удалось получить reasoning summary: {e}")
-                    # Fallback логирование без reasoning_logger
-                    logger.info(
-                        f"[ProductAgent.run] Запрос обработан: "
-                        f"user_input={user_input[:100]}, "
-                        f"steps={steps_count}, "
-                        f"response_length={len(response_text)}"
-                    )
+                except Exception:
+                    # Не логируем ошибки получения summary
+                    pass
 
             if self.memory is not None:
                 try:
                     if not hasattr(self.memory, 'async_initialized') or not self.memory.async_initialized:
                         logger.warning(f"[ProductAgent.run] Память не инициализирована для {client_phone}, пропускаем сохранение")
                     elif not is_init_message:
-                        logger.info(f"[ProductAgent.run] Сохранение сообщений в память для {client_phone}: user_input и response")
                         await self.memory.add_messages(
                             [HumanMessage(content=user_input)]
                         )
                         await self.memory.add_messages(
                             [AIMessage(content=response_text)]
                         )
-                        logger.info(f"[ProductAgent.run] Сообщения успешно сохранены в память для {client_phone}")
+                        # Не логируем успешное сохранение - это не важно
                     else:
-                        logger.info(f"[ProductAgent.run] Сохранение только ответа агента (init_message) для {client_phone}")
                         await self.memory.add_messages(
                             [AIMessage(content=response_text)]
                         )
-                        logger.info(f"[ProductAgent.run] Ответ агента успешно сохранен в память для {client_phone}")
+                        # Не логируем успешное сохранение - это не важно
                 except Exception as e:
                     logger.error(f"[ProductAgent.run] Не удалось сохранить в память для {client_phone}: {e}", exc_info=True)
 
@@ -514,5 +473,5 @@ class ProductAgent(BaseAgent):
                     f"Не удалось сохранить ошибку в LangFuse: {langfuse_error}"
                 )
 
-            logger.info(f"[ProductAgent.run] Завершение обработки запроса для {client_phone} с ошибкой")
+            # Не логируем завершение с ошибкой - уже залогировано выше
             return error_msg

@@ -34,12 +34,11 @@ async def process_conversation_background(request: UserMessageRequest):
 
     try:
         logger.info(
-            f"[processConversation] Получен запрос для {request.client_phone}: "
-            f"message='{request.message}', topic='{request.topic}'"
+            f"[processConversation] Получен запрос для {request.client_phone}, topic: {request.topic}"
         )
         
         memory = await SupabaseConversationMemory(request.client_phone)
-        logger.info(f"[processConversation] Память создана для {request.client_phone}, async_initialized={getattr(memory, 'async_initialized', False)}")
+        # Не логируем создание памяти - это не важно
 
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
@@ -123,8 +122,9 @@ async def init_conversation_background(request: InitConverastionRequest):
         if not hasattr(memory, 'async_initialized') or not memory.async_initialized:
             logger.warning(f"[initConversation] Память не инициализирована для {request.client_phone}, инициализируем...")
             await memory.__ainit__(request.client_phone)
-        
+    
         await memory.clear()
+        # Не логируем очистку памяти - это не важно
 
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
@@ -136,17 +136,13 @@ async def init_conversation_background(request: InitConverastionRequest):
         
         if not welcome_input:
             logger.warning(
-                f"[initConversation] Промпт для topic '{prompt_topic}' не найден в БД для {request.client_phone}. "
-                f"Используется пустой промпт."
+                f"[initConversation] Промпт для topic '{prompt_topic}' не найден в БД для {request.client_phone}"
             )
             welcome_input = ""
         else:
             # Подставляем номер телефона клиента в промпт, если там есть плейсхолдер
             welcome_input = welcome_input.replace("{client_phone}", request.client_phone)
-            logger.info(
-                f"[initConversation] Загружен промпт из БД для topic '{prompt_topic}' для {request.client_phone}. "
-                f"Длина промпта: {len(welcome_input)} символов"
-            )
+            # Не логируем загрузку промпта - это не важно
 
         response_text = await agent.run(
             user_input=welcome_input,
@@ -172,10 +168,6 @@ async def init_conversation_background(request: InitConverastionRequest):
         try:
             pricelist_url = await get_system_value("Прайс-лист")
             if pricelist_url:
-                logger.info(
-                    f"[initConversation] Найден прайс-лист для {request.client_phone}: {pricelist_url}"
-                )
-                
                 parsed_url = urlparse(pricelist_url)
                 file_path = parsed_url.path
                 _, file_extension = os.path.splitext(file_path)
@@ -194,18 +186,12 @@ async def init_conversation_background(request: InitConverastionRequest):
                     extension=file_extension,
                 )
                 
-                if send_file_success:
-                    logger.info(
-                        f"[initConversation] Прайс-лист успешно отправлен для {request.client_phone}"
-                    )
-                else:
+                if not send_file_success:
                     logger.warning(
                         f"[initConversation] Не удалось отправить прайс-лист для {request.client_phone}"
                     )
-            else:
-                logger.info(
-                    f"[initConversation] Прайс-лист не найден в system table для {request.client_phone}"
-                )
+                # Не логируем успешную отправку - это не важно
+            # Не логируем отсутствие прайс-листа - это не важно
         except Exception as pricelist_error:
             logger.error(
                 f"[initConversation] Ошибка при отправке прайс-листа для {request.client_phone}: {pricelist_error}",

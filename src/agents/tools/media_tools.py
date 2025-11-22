@@ -38,10 +38,6 @@ async def send_whatsapp_image(phone: str, file_url: str, caption: str, extension
                 },
             )
             response.raise_for_status()
-            logger.debug(
-                f"[send_whatsapp_image] Файл успешно отправлен для {phone}, "
-                f"статус: {response.status_code}"
-            )
             return True
     except httpx.HTTPStatusError as e:
         logger.error(

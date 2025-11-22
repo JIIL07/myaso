@@ -123,14 +123,16 @@ class ReasoningLogger(BaseCallbackHandler):
                                     reasoning_blocks.append(reasoning_text)
                             
                             if reasoning_blocks:
+                                # Логируем только если reasoning tokens > 1000 (важное reasoning)
                                 for i, reasoning_text in enumerate(reasoning_blocks, 1):
-                                    logger.info(
-                                        f"[ReasoningLogger] 🧠 REASONING #{i} для {self.client_phone}:\n"
-                                        f"{reasoning_text[:3000]}"
-                                    )
+                                    if len(reasoning_text) > 1000:
+                                        logger.info(
+                                            f"[ReasoningLogger] 🧠 REASONING #{i} для {self.client_phone}: "
+                                            f"{len(reasoning_text)} символов"
+                                        )
                                     reasoning_content = reasoning_text
-                    except Exception as e:
-                        logger.debug(f"[ReasoningLogger] Ошибка извлечения content_blocks: {e}")
+                    except Exception:
+                        pass  # Не логируем ошибки извлечения
                 
                 # Проверяем usage_metadata для reasoning tokens
                 if hasattr(message_for_reasoning, "usage_metadata"):
@@ -147,13 +149,13 @@ class ReasoningLogger(BaseCallbackHandler):
                                 if hasattr(output_details, "reasoning_tokens"):
                                     reasoning_tokens = output_details.reasoning_tokens
                             
-                            if reasoning_tokens and reasoning_tokens > 0:
+                            if reasoning_tokens and reasoning_tokens > 1000:
                                 logger.info(
                                     f"[ReasoningLogger] REASONING TOKENS для {self.client_phone}: "
                                     f"{reasoning_tokens} tokens"
                                 )
-                    except Exception as e:
-                        logger.debug(f"[ReasoningLogger] Ошибка извлечения usage_metadata: {e}")
+                    except Exception:
+                        pass  # Не логируем ошибки извлечения
                 
                 # Также проверяем response_metadata для reasoning tokens и content
                 if hasattr(message_for_reasoning, "response_metadata"):
@@ -168,19 +170,19 @@ class ReasoningLogger(BaseCallbackHandler):
                                 token_usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0) or
                                 token_usage.get("output_token_details", {}).get("reasoning_tokens", 0)
                             )
-                            if reasoning_tokens and reasoning_tokens > 0:
+                            if reasoning_tokens and reasoning_tokens > 1000:
                                 logger.info(
                                     f"[ReasoningLogger] REASONING TOKENS (metadata) для {self.client_phone}: "
                                     f"{reasoning_tokens} tokens"
                                 )
                     
-                    # Прямой reasoning в metadata
+                    # Прямой reasoning в metadata - логируем только если длинный
                     if "reasoning" in response_metadata and not reasoning_content:
                         reasoning_text = response_metadata.get("reasoning", "")
-                        if reasoning_text:
+                        if reasoning_text and len(reasoning_text) > 1000:
                             logger.info(
-                                f"[ReasoningLogger] 🧠 REASONING (metadata) для {self.client_phone}:\n"
-                                f"{reasoning_text[:3000]}"
+                                f"[ReasoningLogger] 🧠 REASONING (metadata) для {self.client_phone}: "
+                                f"{len(reasoning_text)} символов"
                             )
                             reasoning_content = reasoning_text
             
@@ -198,16 +200,10 @@ class ReasoningLogger(BaseCallbackHandler):
                         tool_name = "unknown"
                     tool_names.append(tool_name)
             
-            # Логируем результат (одно сообщение вместо нескольких)
-            if tool_calls_info and tool_names:
-                logger.info(
-                    f"[ReasoningLogger] LLM END для {self.client_phone}: "
-                    f"✅ MODEL DECIDED TO CALL TOOLS: {tool_names}"
-                )
-            else:
-                logger.info(
-                    f"[ReasoningLogger] LLM END для {self.client_phone}: "
-                    f"❌ MODEL DECIDED NOT TO CALL TOOLS"
+            # Логируем только если модель НЕ вызвала инструменты (важное предупреждение)
+            if not tool_calls_info or not tool_names:
+                logger.warning(
+                    f"[ReasoningLogger] ⚠️ LLM НЕ вызвал инструменты для {self.client_phone}"
                 )
             
             # Сохраняем информацию о вызове
@@ -245,28 +241,22 @@ class ReasoningLogger(BaseCallbackHandler):
         try:
             tool_name = serialized.get("name", "unknown")
             run_id = kwargs.get("run_id", "unknown")
-            logger.info(
-                f"[ReasoningLogger] TOOL START: {tool_name} для {self.client_phone}"
-            )
-            
+            # Не логируем каждый вызов инструмента - это избыточно
             self._tool_calls.append({
                 "run_id": run_id,
                 "tool_name": tool_name,
                 "input": input_str,
                 "status": "started",
             })
-        except Exception as e:
-            logger.debug(f"[ReasoningLogger] Ошибка в on_tool_start: {e}")
+        except Exception:
+            pass  # Не логируем ошибки
 
     def on_tool_end(self, output: str, **kwargs: Any) -> None:
         """Вызывается когда инструмент завершает выполнение."""
         try:
             tool_name = kwargs.get("name", "unknown")
             run_id = kwargs.get("run_id", "unknown")
-            logger.info(
-                f"[ReasoningLogger] TOOL END: {tool_name} для {self.client_phone} "
-                f"(output: {len(output) if output else 0} символов)"
-            )
+            # Не логируем каждый завершенный инструмент - это избыточно
             
             # Обновляем информацию о вызове инструмента
             for tool_call in self._tool_calls:
@@ -274,8 +264,8 @@ class ReasoningLogger(BaseCallbackHandler):
                     tool_call["status"] = "completed"
                     tool_call["output"] = output[:500] if output else ""
                     break
-        except Exception as e:
-            logger.debug(f"[ReasoningLogger] Ошибка в on_tool_end: {e}")
+        except Exception:
+            pass  # Не логируем ошибки
 
     def on_tool_error(self, error: Exception, **kwargs: Any) -> None:
         """Вызывается когда инструмент встречает ошибку."""

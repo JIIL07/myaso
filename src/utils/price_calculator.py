@@ -108,10 +108,8 @@ def get_delivery_markup(system_vars: Dict[str, str]) -> Tuple[Optional[float], O
         if ("наценк" in key_lower or "markup" in key_lower) and \
            ("доставк" in key_lower or "delivery" in key_lower):
             markup_str = system_vars[key]
-            logger.debug(f"Found delivery markup in key '{key}': {markup_str}")
             return parse_markup_value(markup_str)
     
-    logger.debug("Delivery markup not found in system_vars")
     return None, None
 
 
@@ -158,7 +156,6 @@ def calculate_final_price(
             supplier_normalized = supplier_name.upper().strip()
             # Проверяем разные варианты написания: "ООО КИТ", "ООО"КИТ"", "КИТ"
             if "КИТ" in supplier_normalized and ("ООО" in supplier_normalized or supplier_normalized.startswith("КИТ")):
-                logger.debug(f"Поставщик {supplier_name} - ООО КИТ, возвращаем цену из БД без изменений: {order_price_kg_float}")
                 final_price_rounded = round(order_price_kg_float, 2)
                 return f"{final_price_rounded:.2f}"
         
@@ -172,31 +169,15 @@ def calculate_final_price(
         
         if markup_percentage is not None:
             final_price = final_price * (1 + markup_percentage / 100)
-            logger.debug(
-                f"Applied percentage markup {markup_percentage}%: "
-                f"{order_price_kg_float} -> {final_price}"
-            )
         
         if markup_absolute is not None:
             final_price = final_price + markup_absolute
-            logger.debug(
-                f"Applied absolute markup {markup_absolute} руб: "
-                f"price -> {final_price}"
-            )
         
         if delivery_percentage is not None:
             final_price = final_price * (1 + delivery_percentage / 100)
-            logger.debug(
-                f"Applied delivery percentage markup {delivery_percentage}%: "
-                f"price -> {final_price}"
-            )
         
         if delivery_absolute is not None:
             final_price = final_price + delivery_absolute
-            logger.debug(
-                f"Applied delivery absolute markup {delivery_absolute} руб: "
-                f"price -> {final_price}"
-            )
         
         final_price_rounded = round(final_price, 2)
         
