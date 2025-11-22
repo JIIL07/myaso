@@ -31,6 +31,7 @@ async def get_random_products(limit: int = 10) -> List[Dict[str, Any]]:
                     photo,
                     order_price_kg
                 FROM myaso.products
+                WHERE supplier_name ILIKE '%ООО%КИТ%'
                 ORDER BY RANDOM()
                 LIMIT $1
                 """,
