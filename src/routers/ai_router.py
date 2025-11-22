@@ -44,8 +44,15 @@ async def process_conversation_background(request: UserMessageRequest):
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
 
+        # Добавляем подпись к user_input, чтобы агент обязательно вызывал инструменты
+        user_input_with_tool_signature = (
+            f"{request.message}\n\n"
+            "ВАЖНО: Для ответа на этот запрос ОБЯЗАТЕЛЬНО используй доступные инструменты. "
+            "Не отвечай без вызова инструментов."
+        )
+
         response_text = await agent.run(
-            user_input=request.message,
+            user_input=user_input_with_tool_signature,
             client_phone=request.client_phone,
             topic=request.topic,
             endpoint_name="processConversation",
