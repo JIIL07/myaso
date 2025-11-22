@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from datetime import date
 from typing import Any, List, Optional
@@ -30,6 +29,7 @@ from src.config.constants import (
 from src.config.settings import settings
 from src.database.queries.clients_queries import get_client_is_friend
 from src.utils.callbacks.langfuse_callback import LangfuseHandler
+from src.utils.callbacks.reasoning_logger import ReasoningLogger
 from src.utils.prompts import (
     build_prompt_with_context,
     get_all_system_values,
@@ -147,19 +147,6 @@ class ProductAgent(BaseAgent):
         self.memory = memory
         self.agent_type = agent_type
         self.SYSTEM_PROMPT = self.DEFAULT_SYSTEM_PROMPT
-        self._executor_cache: dict[str, AgentExecutor] = {}
-        self._cached_prompt_hash: Optional[str] = None
-
-    def _get_prompt_hash(self, system_prompt: str) -> str:
-        """Вычисляет хеш промпта для кэширования.
-
-        Args:
-            system_prompt: Системный промпт
-
-        Returns:
-            Хеш промпта
-        """
-        return hashlib.sha256(system_prompt.encode('utf-8')).hexdigest()
 
     def _build_prompt(self, user_input: str, **kwargs: Any) -> str:
         """Собирает промпт для модели.
@@ -248,47 +235,6 @@ class ProductAgent(BaseAgent):
         )
 
         return agent_executor
-
-    def _get_agent_executor(
-        self, callbacks: Optional[List[Any]] = None, tools: Optional[List[Any]] = None
-    ) -> AgentExecutor:
-        """Получает AgentExecutor из кэша или создает новый.
-
-        Кэширует AgentExecutor по хешу текущего SYSTEM_PROMPT и инструментов.
-        Если промпт или инструменты изменились, создает новый executor.
-        
-        ВАЖНО: Если переданы динамические инструменты (tools != None), кэширование
-        происходит по комбинации промпта и инструментов.
-
-        Args:
-            callbacks: Список callbacks для AgentExecutor
-            tools: Список инструментов (если None, используются self.tools)
-
-        Returns:
-            AgentExecutor для выполнения агента
-        """
-        current_prompt_hash = self._get_prompt_hash(self.SYSTEM_PROMPT)
-        agent_tools = tools or self.tools
-        
-        if tools is not None:
-            tools_hash = str(sorted([getattr(t, 'name', str(t)) for t in agent_tools]))
-            cache_key = f"{current_prompt_hash}_{tools_hash}"
-            
-            if cache_key not in self._executor_cache:
-                executor = self.create_agent_executor(callbacks=callbacks, tools=agent_tools)
-                self._executor_cache[cache_key] = executor
-            
-            return self._executor_cache[cache_key]
-        else:
-            if current_prompt_hash != self._cached_prompt_hash or current_prompt_hash not in self._executor_cache:
-                if current_prompt_hash != self._cached_prompt_hash:
-                    self._executor_cache.clear()
-
-                executor = self.create_agent_executor(callbacks=callbacks, tools=agent_tools)
-                self._executor_cache[current_prompt_hash] = executor
-                self._cached_prompt_hash = current_prompt_hash
-
-            return self._executor_cache[current_prompt_hash]
 
     async def run(
         self,
@@ -446,12 +392,15 @@ class ProductAgent(BaseAgent):
                 stdout_handler = StdOutCallbackHandler()
                 callbacks_list.append(stdout_handler)
 
+                reasoning_logger = ReasoningLogger(client_phone=client_phone)
+                callbacks_list.append(reasoning_logger)
+
                 logger.info(
                     f"[ProductAgent.run] Подготовлено {len(callbacks_list)} callbacks: "
                     f"{[type(cb).__name__ for cb in callbacks_list]}"
                 )
 
-                agent_executor = self._get_agent_executor(callbacks=None, tools=agent_tools)
+                agent_executor = self.create_agent_executor(callbacks=None, tools=agent_tools)
 
                 config: RunnableConfig = {
                     "callbacks": callbacks_list,
@@ -483,12 +432,48 @@ class ProductAgent(BaseAgent):
             if result:
                 intermediate_steps = result.get("intermediate_steps", [])
                 steps_count = len(intermediate_steps) if intermediate_steps else 0
-                logger.info(
-                    f"[ProductAgent.run] Запрос обработан: "
-                    f"user_input={user_input[:100]}, "
-                    f"steps={steps_count}, "
-                    f"response_length={len(response_text)}"
-                )
+                
+                # Получаем сводку от reasoning_logger
+                try:
+                    summary = reasoning_logger.get_summary()
+                    
+                    # Логируем только важную информацию без дублирования
+                    if steps_count == 0:
+                        logger.warning(
+                            f"[ProductAgent.run] ⚠️ НЕТ ПРОМЕЖУТОЧНЫХ ШАГОВ для {client_phone}: "
+                            f"агент ответил БЕЗ вызова инструментов! "
+                            f"user_input='{user_input[:200]}', "
+                            f"LLM вызовов={summary['llm_calls']}, "
+                            f"без инструментов={summary['llm_calls_without_tools']}"
+                        )
+                    else:
+                        # Логируем какие инструменты были вызваны
+                        tool_names_list = []
+                        for step in intermediate_steps:
+                            if len(step) >= 2:
+                                action = step[0]
+                                tool_name = "unknown"
+                                if hasattr(action, "tool"):
+                                    tool_name = action.tool
+                                elif isinstance(action, dict):
+                                    tool_name = action.get("tool", "unknown")
+                                tool_names_list.append(tool_name)
+                        
+                        logger.info(
+                            f"[ProductAgent.run] ✅ Запрос обработан для {client_phone}: "
+                            f"использовано {steps_count} инструмент(ов) {tool_names_list}, "
+                            f"LLM вызовов={summary['llm_calls']}, "
+                            f"response_length={len(response_text)}"
+                        )
+                except Exception as e:
+                    logger.debug(f"[ProductAgent.run] Не удалось получить reasoning summary: {e}")
+                    # Fallback логирование без reasoning_logger
+                    logger.info(
+                        f"[ProductAgent.run] Запрос обработан: "
+                        f"user_input={user_input[:100]}, "
+                        f"steps={steps_count}, "
+                        f"response_length={len(response_text)}"
+                    )
 
             if self.memory is not None:
                 try:
