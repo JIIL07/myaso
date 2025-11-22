@@ -111,10 +111,11 @@ def setup_logging():
     log_level = os.getenv("LOG_LEVEL", "INFO")
 
     root_logger = logging.getLogger()
-
     root_logger.handlers.clear()
 
-    for logger_name in logging.Logger.manager.loggerDict:
+    logger_names = list(logging.Logger.manager.loggerDict.keys())
+    
+    for logger_name in logger_names:
         logger_obj = logging.getLogger(logger_name)
         if hasattr(logger_obj, 'handlers'):
             logger_obj.handlers.clear()

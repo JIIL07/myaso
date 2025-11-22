@@ -141,12 +141,12 @@ class ReasoningLogger(BaseCallbackHandler):
                         if usage_metadata:
                             reasoning_tokens = None
                             if isinstance(usage_metadata, dict):
-                                output_details = usage_metadata.get("output_token_details", {})
-                                if isinstance(output_details, dict):
+                                output_details = usage_metadata.get("output_token_details")
+                                if output_details and isinstance(output_details, dict):
                                     reasoning_tokens = output_details.get("reasoning_tokens", 0)
                             elif hasattr(usage_metadata, "output_token_details"):
                                 output_details = usage_metadata.output_token_details
-                                if hasattr(output_details, "reasoning_tokens"):
+                                if output_details and hasattr(output_details, "reasoning_tokens"):
                                     reasoning_tokens = output_details.reasoning_tokens
                             
                             if reasoning_tokens and reasoning_tokens > 1000:
@@ -163,12 +163,14 @@ class ReasoningLogger(BaseCallbackHandler):
                     
                     # Token usage details с reasoning tokens
                     if "token_usage" in response_metadata:
-                        token_usage = response_metadata.get("token_usage", {})
-                        if isinstance(token_usage, dict):
+                        token_usage = response_metadata.get("token_usage")
+                        if token_usage and isinstance(token_usage, dict):
+                            completion_details = token_usage.get("completion_tokens_details")
+                            output_details = token_usage.get("output_token_details")
                             reasoning_tokens = (
                                 token_usage.get("reasoning_tokens") or 
-                                token_usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0) or
-                                token_usage.get("output_token_details", {}).get("reasoning_tokens", 0)
+                                (completion_details.get("reasoning_tokens", 0) if completion_details and isinstance(completion_details, dict) else 0) or
+                                (output_details.get("reasoning_tokens", 0) if output_details and isinstance(output_details, dict) else 0)
                             )
                             if reasoning_tokens and reasoning_tokens > 1000:
                                 logger.info(

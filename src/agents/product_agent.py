@@ -1,23 +1,23 @@
 """ProductAgent - агент для работы с продуктами и каталогом.
 
-Использует LangChain AgentExecutor для обработки запросов пользователей
+Использует LangChain create_agent для обработки запросов пользователей
 с использованием tools для поиска товаров через семантический поиск и SQL фильтрацию.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 from datetime import date
 from typing import Any, List, Optional
 
-from langchain_classic.agents import (
-    AgentExecutor,
-    create_openai_tools_agent,
-    create_react_agent,
-)
+from langchain.agents import create_agent
+from langchain.agents.middleware import ModelCallLimitMiddleware
+
+from src.agents.middleware.tool_error_middleware import handle_tool_errors
 from langchain_core.callbacks.stdout import StdOutCallbackHandler
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 
@@ -38,6 +38,12 @@ from src.utils.prompts import (
 
 from .base_agent import BaseAgent
 from .tools.client_tools import get_client_profile
+from .tools.context_tools import (
+    clear_agent_context,
+    create_context_tools,
+    get_is_init_message,
+    get_require_photo,
+)
 from .tools.media_tools import create_media_tools
 from .tools.product_tools import get_random_products, vector_search
 from .tools.sql_tools import create_sql_tools
@@ -76,9 +82,9 @@ def is_greeting_message(message: str) -> bool:
 class ProductAgent(BaseAgent):
     """Агент для обработки запросов пользователей о товарах и каталоге.
 
-    Использует AgentExecutor с tools для поиска товаров через:
+    Использует LangChain create_agent с tools для поиска товаров через:
     - vector_search для семантического поиска
-    - t + execute_sql_query для фильтрации по параметрам
+    - generate_sql_from_text + execute_sql_query для фильтрации по параметрам
     - get_random_products как fallback
     """
 
@@ -91,7 +97,6 @@ class ProductAgent(BaseAgent):
         retriever: Optional[Any] = None,
         memory: Optional[Any] = None,
         tools: Optional[List[Any]] = None,
-        agent_type: str = "openai-tools",
         **kwargs: Any,
     ) -> None:
         """Инициализация ProductAgent.
@@ -101,8 +106,11 @@ class ProductAgent(BaseAgent):
             retriever: Векторный ретривер (опционально, для будущего использования)
             memory: Память диалога (BaseChatMessageHistory)
             tools: Список инструментов (если None, используются стандартные)
-            agent_type: Тип агента - "openai-tools" или "zero-shot-react-description"
             **kwargs: Дополнительные параметры для BaseAgent
+
+        Note:
+            Агент создается через LangChain create_agent API, который автоматически
+            определяет тип агента на основе модели и инструментов.
         """
         if llm is None:
             try:
@@ -140,96 +148,300 @@ class ProductAgent(BaseAgent):
         self.llm = llm
         self.retriever = retriever
         self.memory = memory
-        self.agent_type = agent_type
         self.SYSTEM_PROMPT = self.DEFAULT_SYSTEM_PROMPT
+        self._agent_cache: dict[str, Any] = {}
+        self._cached_prompt_hash: Optional[str] = None
 
-    def _build_prompt(self, user_input: str, **kwargs: Any) -> str:
-        """Собирает промпт для модели.
+    def _get_prompt_hash(self, system_prompt: str) -> str:
+        """Вычисляет хеш промпта для кэширования.
 
         Args:
-            user_input: Входной запрос пользователя
-            **kwargs: Дополнительные параметры
+            system_prompt: Системный промпт
 
         Returns:
-            Строка с промптом
+            Хеш промпта
         """
+        return hashlib.sha256(system_prompt.encode('utf-8')).hexdigest()
+
+    def _build_prompt(self, user_input: str, **kwargs: Any) -> str:
+        """Собирает промпт для модели (требуется BaseAgent, но не используется)."""
         return user_input
 
     def _create_tools(self) -> List[Any]:
-        """Создаёт и возвращает список инструментов.
-
-        Returns:
-            Список инструментов агента
-        """
+        """Создаёт и возвращает список инструментов (требуется BaseAgent, но не используется)."""
         return self.tools
 
-    def build_prompt(self, user_input: str, **kwargs: Any) -> str:
-        """Собирает промпт для модели (публичный метод для обратной совместимости).
+    def _create_agent(
+        self, tools: Optional[List[Any]] = None
+    ) -> Any:
+        """Создаёт агента через create_agent API.
 
         Args:
-            user_input: Входной запрос пользователя
-            **kwargs: Дополнительные параметры
-
-        Returns:
-            Строка с промптом
-        """
-        return self._build_prompt(user_input, **kwargs)
-
-    def create_tools(self) -> List[Any]:
-        """Создаёт и возвращает список инструментов (публичный метод для обратной совместимости).
-
-        Returns:
-            Список инструментов агента
-        """
-        return self._create_tools()
-
-    def create_agent_executor(
-        self, callbacks: Optional[List[Any]] = None, tools: Optional[List[Any]] = None
-    ) -> AgentExecutor:
-        """Создаёт AgentExecutor с промптом и инструментами.
-
-        Args:
-            callbacks: Список callbacks для AgentExecutor
             tools: Список инструментов (если None, используются self.tools)
 
         Returns:
-            AgentExecutor для выполнения агента
+            Runnable объект агента
         """
         system_prompt = self.SYSTEM_PROMPT
         agent_tools = tools or self.tools
 
-        if self.agent_type == "openai-tools":
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    ("system", system_prompt),
-                    MessagesPlaceholder(variable_name="chat_history"),
-                    ("human", "{input}"),
-                    MessagesPlaceholder(variable_name="agent_scratchpad"),
-                ]
+        # Создаем middleware для ограничения вызовов модели и обработки ошибок
+        middleware = [handle_tool_errors]
+        if MAX_AGENT_ITERATIONS > 0:
+            middleware.append(
+                ModelCallLimitMiddleware(
+                    run_limit=MAX_AGENT_ITERATIONS,
+                    exit_behavior="end",
+                )
             )
-            agent = create_openai_tools_agent(self.llm, agent_tools, prompt)
-        else:
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    ("system", system_prompt),
-                    MessagesPlaceholder(variable_name="chat_history"),
-                    ("human", "{input}"),
-                    MessagesPlaceholder(variable_name="agent_scratchpad"),
-                ]
-            )
-            agent = create_react_agent(self.llm, agent_tools, prompt)
 
-        agent_executor = AgentExecutor(
-            agent=agent,
+        agent = create_agent(
+            model=self.llm,
             tools=agent_tools,
-            verbose=True,
-            handle_parsing_errors=True,
-            max_iterations=MAX_AGENT_ITERATIONS,
-            max_execution_time=MAX_AGENT_EXECUTION_TIME,
-            callbacks=None,
+            system_prompt=system_prompt,
+            middleware=middleware if middleware else None,
         )
 
-        return agent_executor
+        return agent
+
+    def _get_agent(
+        self, tools: Optional[List[Any]] = None
+    ) -> Any:
+        """Получает агента из кэша или создает новый.
+
+        Кэширует агента по хешу текущего SYSTEM_PROMPT и инструментов.
+        Если промпт или инструменты изменились, создает новый агент.
+
+        Args:
+            tools: Список инструментов (если None, используются self.tools)
+
+        Returns:
+            Runnable объект агента
+        """
+        current_prompt_hash = self._get_prompt_hash(self.SYSTEM_PROMPT)
+        agent_tools = tools or self.tools
+
+        if tools is not None:
+            tools_hash = str(sorted([getattr(t, 'name', str(t)) for t in agent_tools]))
+            cache_key = f"{current_prompt_hash}_{tools_hash}"
+        else:
+            cache_key = current_prompt_hash
+
+        if cache_key not in self._agent_cache:
+            agent = self._create_agent(tools=agent_tools)
+            self._agent_cache[cache_key] = agent
+            self._cached_prompt_hash = current_prompt_hash
+        else:
+            # Проверяем, изменился ли промпт
+            if current_prompt_hash != self._cached_prompt_hash:
+                # Промпт изменился - очищаем кэш и создаем новый агент
+                self._agent_cache.clear()
+                agent = self._create_agent(tools=agent_tools)
+                self._agent_cache[cache_key] = agent
+                self._cached_prompt_hash = current_prompt_hash
+            else:
+                agent = self._agent_cache[cache_key]
+
+        return agent
+
+    async def _load_prompt_and_context(
+        self,
+        topic: Optional[str],
+        client_phone: str,
+    ) -> tuple[str, Dict[str, str], str, List[BaseMessage]]:
+        """Загружает промпт, системные переменные, информацию о клиенте и историю.
+
+        Args:
+            topic: Тема диалога для загрузки промпта из БД
+            client_phone: Номер телефона клиента
+
+        Returns:
+            Кортеж (base_prompt, system_vars, client_info, chat_history)
+        """
+        db_prompt = None
+        if topic:
+            try:
+                db_prompt = await get_prompt(topic)
+                if not db_prompt:
+                    logger.warning(f"[ProductAgent] Промпт для topic '{topic}' не найден в БД")
+            except Exception as e:
+                logger.error(f"[ProductAgent] Не удалось загрузить промпт для topic '{topic}': {e}")
+
+        system_vars = {}
+        try:
+            system_vars = await get_all_system_values()
+        except Exception as e:
+            logger.error(f"[ProductAgent] Не удалось загрузить системные переменные: {e}")
+
+        if db_prompt:
+            base_prompt = db_prompt + f"\n\n{self.DEFAULT_SYSTEM_PROMPT}"
+        else:
+            base_prompt = self.DEFAULT_SYSTEM_PROMPT
+
+        chat_history: List[BaseMessage] = []
+        if self.memory is not None:
+            try:
+                if not hasattr(self.memory, 'async_initialized') or not self.memory.async_initialized:
+                    logger.warning(f"[ProductAgent] Память не инициализирована для {client_phone}, пропускаем загрузку истории")
+                    chat_history = []
+                else:
+                    memory_vars = await self.memory.load_memory_variables({}, return_messages=True)
+                    chat_history = memory_vars.get("history", [])
+            except Exception as e:
+                logger.error(f"[ProductAgent] Не удалось загрузить память: {e}", exc_info=True)
+                chat_history = []
+
+        client_is_friend = False
+        try:
+            client_is_friend = await get_client_is_friend(client_phone)
+        except Exception as e:
+            logger.error(f"[ProductAgent] Не удалось получить статус дружбы клиента: {e}", exc_info=True)
+
+        client_info_parts = [
+            f"Номер телефона: {client_phone}",
+            f"Статус дружбы (it_is_friend): {client_is_friend}",
+        ]
+        if client_is_friend:
+            client_info_parts.append("ОБРАЩЕНИЕ: Используй 'ты' (неформальное общение)")
+        else:
+            client_info_parts.append("ОБРАЩЕНИЕ: Используй 'вы' (формальное общение)")
+
+        client_info = "\n".join(client_info_parts)
+
+        return base_prompt, system_vars, client_info, chat_history
+
+    def _prepare_messages(
+        self,
+        user_input: str,
+        chat_history: List[BaseMessage],
+    ) -> str:
+        """Подготавливает сообщения с контекстом для агента.
+
+        Args:
+            user_input: Текст запроса пользователя
+            chat_history: История сообщений
+
+        Returns:
+            Текст запроса с добавленным контекстом
+        """
+        is_second_message = False
+        if len(chat_history) == 1:
+            if isinstance(chat_history[0], AIMessage):
+                is_second_message = True
+        elif len(chat_history) == 2:
+            if isinstance(chat_history[0], AIMessage) and isinstance(chat_history[1], HumanMessage):
+                is_second_message = True
+
+        client_greeted = is_greeting_message(user_input)
+
+        context_parts = []
+        if client_greeted:
+            if is_second_message:
+                context_parts.append("ВАЖНО: Это второе сообщение, но клиент поздоровался с тобой. Поздоровайся в ответ, затем продолжай общение.")
+            else:
+                context_parts.append("ВАЖНО: Клиент поздоровался с тобой. Поздоровайся в ответ, затем продолжай общение.")
+        elif is_second_message:
+            context_parts.append("ВАЖНО: Это второе сообщение в разговоре. НЕ используй приветствие, сразу переходи к делу.")
+
+        if context_parts:
+            return user_input + "\n\n" + "\n".join(context_parts)
+        return user_input
+
+    async def _execute_agent(
+        self,
+        messages: List[BaseMessage],
+        agent_tools: List[Any],
+        config: RunnableConfig,
+    ) -> Dict[str, Any]:
+        """Выполняет агента с заданными сообщениями и инструментами.
+
+        Args:
+            messages: Список сообщений для агента
+            agent_tools: Список инструментов агента
+            config: Конфигурация для выполнения
+
+        Returns:
+            Результат выполнения агента
+
+        Raises:
+            Exception: Если произошла ошибка при выполнении агента
+        """
+        agent = self._get_agent(tools=agent_tools)
+
+        if MAX_AGENT_EXECUTION_TIME > 0:
+            result = await asyncio.wait_for(
+                agent.ainvoke({"messages": messages}, config=config),
+                timeout=MAX_AGENT_EXECUTION_TIME,
+            )
+        else:
+            result = await agent.ainvoke({"messages": messages}, config=config)
+
+        return result
+
+    def _extract_response(self, result: Dict[str, Any]) -> str:
+        """Извлекает ответ агента из результата выполнения.
+
+        Args:
+            result: Результат выполнения агента
+
+        Returns:
+            Текст ответа агента
+        """
+        messages_result = result.get("messages", [])
+        response_text = ""
+
+        for msg in reversed(messages_result):
+            if isinstance(msg, AIMessage):
+                content = msg.content
+                if isinstance(content, str):
+                    response_text = content
+                elif isinstance(content, list):
+                    text_parts = []
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            text_parts.append(item.get("text", ""))
+                        elif isinstance(item, str):
+                            text_parts.append(item)
+                    response_text = " ".join(text_parts) if text_parts else str(content)
+                else:
+                    response_text = str(content) if content else ""
+                break
+
+        if not response_text:
+            response_text = result.get("output", "")
+        if not response_text:
+            response_text = "Упс, что-то пошло не так 😅. Попробуйте переформулировать запрос, и я обязательно помогу!"
+
+        return response_text
+
+    async def _save_to_memory(
+        self,
+        user_input: str,
+        response_text: str,
+        is_init_message: bool,
+        client_phone: str,
+    ) -> None:
+        """Сохраняет сообщения в память.
+
+        Args:
+            user_input: Текст запроса пользователя
+            response_text: Текст ответа агента
+            is_init_message: Если True, не сохраняет user_input
+            client_phone: Номер телефона клиента
+        """
+        if self.memory is None:
+            return
+
+        try:
+            if not hasattr(self.memory, 'async_initialized') or not self.memory.async_initialized:
+                logger.warning(f"[ProductAgent] Память не инициализирована для {client_phone}, пропускаем сохранение")
+                return
+
+            if not is_init_message:
+                await self.memory.add_messages([HumanMessage(content=user_input)])
+            await self.memory.add_messages([AIMessage(content=response_text)])
+        except Exception as e:
+            logger.error(f"[ProductAgent] Не удалось сохранить в память для {client_phone}: {e}", exc_info=True)
 
     async def run(
         self,
@@ -241,6 +453,10 @@ class ProductAgent(BaseAgent):
     ) -> str:
         """Запускает агента для обработки запроса пользователя.
 
+        Использует современный LangChain API create_agent для выполнения агента.
+        Формат вызова: {"messages": [...]} вместо старого {"input": ..., "chat_history": ...}.
+        Результат: {"messages": [...]} с последним AIMessage в качестве ответа.
+
         Args:
             user_input: Текст запроса пользователя
             client_phone: Номер телефона клиента
@@ -249,7 +465,7 @@ class ProductAgent(BaseAgent):
             endpoint_name: Имя endpoint для трейсинга
 
         Returns:
-            Строка с ответом агента
+            Строка с ответом агента (извлекается из последнего AIMessage)
         """
         trace_name = endpoint_name or "ProductAgent"
 
@@ -260,75 +476,31 @@ class ProductAgent(BaseAgent):
         )
 
         try:
-            # Логируем только начало обработки с ключевой информацией
-            logger.info(
-                f"[ProductAgent.run] Начало обработки для {client_phone}, topic: {topic}"
+            logger.info(f"[ProductAgent.run] Начало обработки для {client_phone}, topic: {topic}")
+
+            base_prompt, system_vars, client_info, chat_history = await self._load_prompt_and_context(
+                topic, client_phone
             )
 
-            db_prompt = None
-            if topic:
-                try:
-                    db_prompt = await get_prompt(topic)
-                    if not db_prompt:
-                        logger.warning(f"[ProductAgent.run] Промпт для topic '{topic}' не найден в БД")
-                except Exception as e:
-                    logger.error(
-                        f"[ProductAgent.run] Не удалось загрузить промпт для topic '{topic}': {e}"
-                    )
+            # Загружаем дополнительные промпты для инструментов
+            tool_prompts = []
+            for prompt_topic in [
+                "SQL Generation Rules",
+                "Vector Search Instructions",
+                "Photo Sending Instructions",
+                "Tool Usage Guidelines",
+            ]:
+                tool_prompt = await get_prompt(prompt_topic)
+                if tool_prompt:
+                    tool_prompts.append(tool_prompt)
 
-            system_vars = {}
-            try:
-                system_vars = await get_all_system_values()
-            except Exception as e:
-                logger.error(f"[ProductAgent.run] Не удалось загрузить системные переменные: {e}")
-
-            if db_prompt:
-                base_prompt = db_prompt + f"\n\n{self.DEFAULT_SYSTEM_PROMPT}"
-            else:
-                base_prompt = self.DEFAULT_SYSTEM_PROMPT
-
-            chat_history: List[BaseMessage] = []
-            if self.memory is not None:
-                try:
-                    if not hasattr(self.memory, 'async_initialized') or not self.memory.async_initialized:
-                        logger.warning(f"[ProductAgent.run] Память не инициализирована для {client_phone}, пропускаем загрузку истории")
-                        chat_history = []
-                    else:
-                        memory_vars = await self.memory.load_memory_variables(
-                            {}, return_messages=True
-                        )
-                        chat_history = memory_vars.get("history", [])
-                        # Не логируем загрузку истории - это не важно
-                except Exception as e:
-                    logger.error(f"[ProductAgent.run] Не удалось загрузить память: {e}", exc_info=True)
-                    chat_history = []
-
-            client_is_friend = False
-            try:
-                client_is_friend = await get_client_is_friend(client_phone)
-                # Не логируем статус дружбы - это не важно
-            except Exception as e:
-                logger.error(f"[ProductAgent.run] Не удалось получить статус дружбы клиента: {e}", exc_info=True)
-
-            is_second_message = False
-            client_greeted = is_greeting_message(user_input)
-            
-            if len(chat_history) == 1:
-                if isinstance(chat_history[0], AIMessage):
-                    is_second_message = True
-            elif len(chat_history) == 2:
-                if isinstance(chat_history[0], AIMessage) and isinstance(chat_history[1], HumanMessage):
-                    is_second_message = True
-
-            client_info_parts = []
-            client_info_parts.append(f"Номер телефона: {client_phone}")
-            client_info_parts.append(f"Статус дружбы (it_is_friend): {client_is_friend}")
-            if client_is_friend:
-                client_info_parts.append("ОБРАЩЕНИЕ: Используй 'ты' (неформальное общение)")
-            else:
-                client_info_parts.append("ОБРАЩЕНИЕ: Используй 'вы' (формальное общение)")
-            
-            client_info = "\n".join(client_info_parts)
+            # Объединяем все промпты
+            if tool_prompts:
+                tools_section = "\n\n".join([f"--- {topic} ---\n{p}" for topic, p in zip(
+                    ["SQL Generation Rules", "Vector Search Instructions", "Photo Sending Instructions", "Tool Usage Guidelines"],
+                    tool_prompts
+                ) if p])
+                base_prompt = f"{base_prompt}\n\n{tools_section}"
 
             final_prompt = build_prompt_with_context(
                 base_prompt=base_prompt,
@@ -336,142 +508,103 @@ class ProductAgent(BaseAgent):
                 system_vars=system_vars if system_vars else None,
             )
             self.SYSTEM_PROMPT = final_prompt
-            # Не логируем детали промпта - это избыточно
 
-            context_parts = []
-            if client_greeted:
-                if is_second_message:
-                    context_parts.append("ВАЖНО: Это второе сообщение, но клиент поздоровался с тобой. Поздоровайся в ответ, затем продолжай общение.")
-                else:
-                    context_parts.append("ВАЖНО: Клиент поздоровался с тобой. Поздоровайся в ответ, затем продолжай общение.")
-            elif is_second_message:
-                context_parts.append("ВАЖНО: Это второе сообщение в разговоре. НЕ используй приветствие, сразу переходи к делу.")
+            input_with_context = self._prepare_messages(user_input, chat_history)
+
+            # Очищаем контекст перед новым запросом
+            clear_agent_context(client_phone)
             
-            input_with_context = user_input
-            if context_parts:
-                input_with_context = user_input + "\n\n" + "\n".join(context_parts)
-            # Не логируем финальный запрос - это избыточно
+            # Устанавливаем начальный контекст если это init message
+            if is_init_message:
+                context_tools = create_context_tools(client_phone)
+                # Устанавливаем контекст через tool (агент может это сделать сам, но для init мы делаем заранее)
+                from .tools.context_tools import get_agent_context
+                get_agent_context(client_phone)["is_init_message"] = True
+            else:
+                context_tools = create_context_tools(client_phone)
 
-            sql_tools = create_sql_tools(is_init_message=is_init_message)
-            media_tools = create_media_tools(client_phone=client_phone, is_init_message=is_init_message)
-            agent_tools = self.tools + sql_tools + media_tools
+            sql_tools = create_sql_tools()
+            media_tools = create_media_tools(
+                client_phone=client_phone,
+                is_init_message=get_is_init_message(client_phone)
+            )
+            agent_tools = self.tools + sql_tools + media_tools + context_tools
+
+            reasoning_logger = ReasoningLogger(client_phone=client_phone)
+            callbacks_list = [
+                langfuse_handler,
+                StdOutCallbackHandler(),
+                reasoning_logger,
+            ]
+
+            config: RunnableConfig = {
+                "callbacks": callbacks_list,
+                "metadata": {
+                    "phone": client_phone,
+                    "user_id": client_phone,
+                    "trace_name": trace_name,
+                },
+                "run_name": trace_name,
+                "tags": ["product_agent", "conversation", trace_name],
+            }
+
+            messages = []
+            if chat_history:
+                messages.extend(chat_history)
+            messages.append(HumanMessage(content=input_with_context))
 
             try:
-                callbacks_list = []
-                callbacks_list.append(langfuse_handler)
-
-                stdout_handler = StdOutCallbackHandler()
-                callbacks_list.append(stdout_handler)
-
-                reasoning_logger = ReasoningLogger(client_phone=client_phone)
-                callbacks_list.append(reasoning_logger)
-                # Не логируем детали callbacks - это не важно
-
-                agent_executor = self.create_agent_executor(callbacks=None, tools=agent_tools)
-
-                config: RunnableConfig = {
-                    "callbacks": callbacks_list,
-                    "metadata": {
-                        "phone": client_phone,
-                        "user_id": client_phone,
-                        "trace_name": trace_name,
-                    },
-                    "run_name": trace_name,
-                    "tags": ["product_agent", "conversation", trace_name],
-                }
-
-                result = await agent_executor.ainvoke(
-                    {
-                        "input": input_with_context,
-                        "chat_history": chat_history,
-                    },
-                    config=config,
-                )
+                result = await self._execute_agent(messages, agent_tools, config)
+            except asyncio.TimeoutError:
+                error_msg = f"Агент превысил максимальное время выполнения ({MAX_AGENT_EXECUTION_TIME} секунд)"
+                logger.error(f"[ProductAgent.run] Timeout агента: {error_msg}")
+                raise Exception(error_msg)
             except Exception as e:
                 error_msg = f"Ошибка при выполнении агента: {str(e)}"
-                logger.error(f"[ProductAgent.run] Ошибка AgentExecutor: {error_msg}", exc_info=True)
+                logger.error(f"[ProductAgent.run] Ошибка агента: {error_msg}", exc_info=True)
                 raise Exception(error_msg) from e
 
-            response_text = result.get("output", "")
-            if not response_text:
-                response_text = "Упс, что-то пошло не так 😅. Попробуйте переформулировать запрос, и я обязательно помогу!"
-            
-            if result:
-                intermediate_steps = result.get("intermediate_steps", [])
-                steps_count = len(intermediate_steps) if intermediate_steps else 0
-                
-                # Получаем сводку от reasoning_logger
+            response_text = self._extract_response(result)
+
+            messages_result = result.get("messages", [])
+            if messages_result:
+                tool_messages = [msg for msg in messages_result if isinstance(msg, ToolMessage)]
+                steps_count = len(tool_messages) if tool_messages else 0
+
                 try:
                     summary = reasoning_logger.get_summary()
-                    
-                    # Логируем только важную информацию без дублирования
+
                     if steps_count == 0:
                         logger.warning(
-                            f"[ProductAgent.run] ⚠️ НЕТ ПРОМЕЖУТОЧНЫХ ШАГОВ для {client_phone}: "
+                            f"[ProductAgent.run] ⚠️ НЕТ ВЫЗОВОВ ИНСТРУМЕНТОВ для {client_phone}: "
                             f"агент ответил БЕЗ вызова инструментов! "
                             f"user_input='{user_input[:200]}', "
                             f"LLM вызовов={summary['llm_calls']}, "
                             f"без инструментов={summary['llm_calls_without_tools']}"
                         )
                     else:
-                        # Логируем какие инструменты были вызваны
-                        tool_names_list = []
-                        for step in intermediate_steps:
-                            if len(step) >= 2:
-                                action = step[0]
-                                tool_name = "unknown"
-                                if hasattr(action, "tool"):
-                                    tool_name = action.tool
-                                elif isinstance(action, dict):
-                                    tool_name = action.get("tool", "unknown")
-                                tool_names_list.append(tool_name)
-                        
                         logger.info(
                             f"[ProductAgent.run] ✅ Запрос обработан для {client_phone}: "
-                            f"использовано {steps_count} инструмент(ов) {tool_names_list}, "
+                            f"использовано {steps_count} инструмент(ов), "
                             f"LLM вызовов={summary['llm_calls']}, "
                             f"response_length={len(response_text)}"
                         )
                 except Exception:
-                    # Не логируем ошибки получения summary
                     pass
 
-            if self.memory is not None:
-                try:
-                    if not hasattr(self.memory, 'async_initialized') or not self.memory.async_initialized:
-                        logger.warning(f"[ProductAgent.run] Память не инициализирована для {client_phone}, пропускаем сохранение")
-                    elif not is_init_message:
-                        await self.memory.add_messages(
-                            [HumanMessage(content=user_input)]
-                        )
-                        await self.memory.add_messages(
-                            [AIMessage(content=response_text)]
-                        )
-                        # Не логируем успешное сохранение - это не важно
-                    else:
-                        await self.memory.add_messages(
-                            [AIMessage(content=response_text)]
-                        )
-                        # Не логируем успешное сохранение - это не важно
-                except Exception as e:
-                    logger.error(f"[ProductAgent.run] Не удалось сохранить в память для {client_phone}: {e}", exc_info=True)
+            await self._save_to_memory(user_input, response_text, is_init_message, client_phone)
 
             langfuse_handler.save_conversation_to_langfuse()
 
             return response_text
 
         except Exception as e:
-            error_msg = (
-                f"Ой, что-то пошло не так 😔. Попробуйте написать еще раз, пожалуйста!"
-            )
+            error_msg = "Ой, что-то пошло не так 😔. Попробуйте написать еще раз, пожалуйста!"
             logger.error(f"[ProductAgent.run] Ошибка ProductAgent: {str(e)}", exc_info=True)
 
             try:
                 langfuse_handler.save_conversation_to_langfuse()
             except Exception as langfuse_error:
-                logger.warning(
-                    f"Не удалось сохранить ошибку в LangFuse: {langfuse_error}"
-                )
+                logger.warning(f"Не удалось сохранить ошибку в LangFuse: {langfuse_error}")
 
-            # Не логируем завершение с ошибкой - уже залогировано выше
             return error_msg
