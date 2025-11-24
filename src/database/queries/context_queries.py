@@ -5,6 +5,7 @@ from src.config.database_constants import (
     COLUMN_CONTEXT_DATA,
     TABLE_AGENT_CONTEXT,
 )
+from src.models.entities import AgentContext
 from src.utils import get_supabase_client
 
 
@@ -32,6 +33,30 @@ async def get_agent_context_from_db(client_phone: str) -> Dict[str, Any]:
         raise RuntimeError(f"Ошибка при получении контекста агента: {e}") from e
 
 
+async def get_agent_context_model(client_phone: str) -> Optional[AgentContext]:
+    """Получает полную модель контекста агента из базы данных.
+
+    Args:
+        client_phone: Номер телефона клиента
+
+    Returns:
+        Модель AgentContext или None если не найден
+    """
+    try:
+        supabase = await get_supabase_client()
+        result = (
+            await supabase.table(TABLE_AGENT_CONTEXT)
+            .select("*")
+            .eq(COLUMN_CLIENT_PHONE, client_phone)
+            .execute()
+        )
+        if result.data and len(result.data) > 0:
+            return AgentContext(**result.data[0])
+        return None
+    except Exception as e:
+        raise RuntimeError(f"Ошибка при получении контекста агента: {e}") from e
+
+
 async def save_agent_context_to_db(
     client_phone: str, context_data: Dict[str, Any]
 ) -> None:
@@ -50,6 +75,26 @@ async def save_agent_context_to_db(
                     COLUMN_CLIENT_PHONE: client_phone,
                     COLUMN_CONTEXT_DATA: context_data,
                 },
+                on_conflict=COLUMN_CLIENT_PHONE,
+            )
+            .execute()
+        )
+    except Exception as e:
+        raise RuntimeError(f"Ошибка при сохранении контекста агента: {e}") from e
+
+
+async def save_agent_context_model(context: AgentContext) -> None:
+    """Сохраняет модель контекста агента в базу данных.
+
+    Args:
+        context: Модель AgentContext для сохранения
+    """
+    try:
+        supabase = await get_supabase_client()
+        await (
+            supabase.table(TABLE_AGENT_CONTEXT)
+            .upsert(
+                context.model_dump(exclude_none=True),
                 on_conflict=COLUMN_CLIENT_PHONE,
             )
             .execute()

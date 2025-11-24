@@ -319,7 +319,7 @@ def create_sql_tools():
                 return f"SQL условия не прошли валидацию: {e}", []
 
             try:
-                json_result, has_more = await get_products_by_sql_conditions(sql_conditions, limit)
+                products, has_more = await get_products_by_sql_conditions(sql_conditions, limit)
             except RuntimeError as e:
                 logger.error(f"Ошибка подключения к базе данных: {e}")
                 return "Не настроено подключение к базе данных.", []
@@ -328,8 +328,10 @@ def create_sql_tools():
                 logger.error(f"SQL условия, которые вызвали ошибку: {sql_conditions[:200]}")
                 return "Товары по указанным условиям не найдены.", []
 
-            if not json_result:
+            if not products:
                 return "Товары по указанным условиям не найдены.", []
+
+            json_result = [product.model_dump() for product in products]
 
         result_text, product_ids = await format_products_list(json_result)
 

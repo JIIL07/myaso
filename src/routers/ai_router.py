@@ -300,22 +300,15 @@ async def get_profile(client_phone: str):
         )
         message_count = len(history_resp.data) if history_resp.data else 0
 
-        orders_resp = (
-            await supabase.table(TABLE_ORDERS)
-            .select("*")
-            .eq(COLUMN_CLIENT_PHONE, client_phone)
-            .order(COLUMN_CREATED_AT, desc=True)
-            .execute()
-        )
-        orders = orders_resp.data if orders_resp.data else []
-        if orders:
-            o = orders[0]
+        from src.database.queries.orders_queries import get_last_order
+        order = await get_last_order(client_phone)
+        if order:
             last_order = {
-                COLUMN_TITLE: o.get(COLUMN_TITLE),
-                COLUMN_CREATED_AT: o.get(COLUMN_CREATED_AT),
-                COLUMN_DESTINATION: o.get(COLUMN_DESTINATION),
-                COLUMN_PRICE_OUT: o.get(COLUMN_PRICE_OUT),
-                COLUMN_WEIGHT_KG: o.get(COLUMN_WEIGHT_KG),
+                COLUMN_TITLE: order.title,
+                COLUMN_CREATED_AT: order.created_at.isoformat() if order.created_at else None,
+                COLUMN_DESTINATION: order.destination,
+                COLUMN_PRICE_OUT: order.price_out,
+                COLUMN_WEIGHT_KG: order.weight_kg,
             }
     except Exception:
         pass

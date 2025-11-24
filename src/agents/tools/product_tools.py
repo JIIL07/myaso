@@ -109,18 +109,17 @@ async def get_random_products(limit: int = 10) -> Tuple[str, List[int]]:
     Returns:
         Кортеж (текст с результатами, список ID товаров как artifact)
     """
-    # Лимиты управляются через SYSTEM_PROMPT из БД, принимаем любой limit
 
     try:
-        json_result = await get_random_products_db(limit)
+        products = await get_random_products_db(limit)
 
-        if not json_result:
+        if not products:
             return "Товары не найдены.", []
 
-        result_text, product_ids = await format_products_list(json_result)
+        products_dict = [product.model_dump() for product in products]
+        result_text, product_ids = await format_products_list(products_dict)
 
-        # Возвращаем кортеж: (текст, artifact с product_ids)
-        return f"Найдено товаров: {len(json_result)}\n\n{result_text}", product_ids
+        return f"Найдено товаров: {len(products)}\n\n{result_text}", product_ids
 
     except RuntimeError as e:
         logger.error(f"Ошибка подключения к базе данных: {e}")

@@ -65,16 +65,20 @@ async def get_client_orders(phone: str) -> str:
 
         orders_list = []
         for order in orders:
-            order_info = [
-                f"Товар: {order.get('title', 'Не указано')}",
-                f"Дата: {order.get('created_at', 'Не указано')}",
-                f"Вес (кг): {order.get('weight_kg', 'Не указано')}",
-                f"Цена: {order.get('price_out', 'Не указано')}",
-                f"Пункт назначения: {order.get('destination', 'Не указано')}",
-            ]
-            orders_list.append(
-                "\n".join([info for info in order_info if "Не указано" not in info])
-            )
+            order_info = []
+            if order.title:
+                order_info.append(f"Товар: {order.title}")
+            if order.created_at:
+                order_info.append(f"Дата: {order.created_at}")
+            if order.weight_kg is not None:
+                order_info.append(f"Вес (кг): {order.weight_kg}")
+            if order.price_out is not None:
+                order_info.append(f"Цена: {order.price_out}")
+            if order.destination:
+                order_info.append(f"Пункт назначения: {order.destination}")
+            
+            if order_info:
+                orders_list.append("\n".join(order_info))
 
         result_text = "\n\n---\n\n".join(orders_list)
         return f"Найдено заказов: {len(orders)}\n\n{result_text}"
