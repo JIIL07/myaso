@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import List, Tuple
 
 from langchain_core.tools import tool
 
@@ -11,14 +12,15 @@ from src.database.queries.products_queries import (
 )
 from src.utils.prompts import get_all_system_values
 from src.utils.retrievers import SupabaseVectorRetriever
-from src.utils.product_formatter import format_products_list, create_product_ids_section
+from src.utils.product_formatter import format_products_list
 from src.agents.tools.context_tools import get_require_photo
+from src.agents.tools.context_vars import get_client_phone
 
 logger = logging.getLogger(__name__)
 
 
-@tool
-async def vector_search(query: str, k: int = 10, require_photo: bool = False) -> str:
+@tool(response_format="content_and_artifact")
+async def vector_search(query: str, k: int = 10, require_photo: bool = False) -> Tuple[str, List[int]]:
     """Семантический поиск товаров по текстовому запросу (векторный поиск).
 
     НАЗНАЧЕНИЕ: Семантический поиск товаров по текстовому запросу (векторный поиск)
@@ -35,7 +37,7 @@ async def vector_search(query: str, k: int = 10, require_photo: bool = False) ->
                       Если False, используется значение из контекста агента (если установлено)
 
     Returns:
-        Список найденных товаров с ID в секции [PRODUCT_IDS]
+        Кортеж (текст с результатами, список ID товаров как artifact)
     """
     # Используем контекст если require_photo не указан явно
     if not require_photo:
@@ -52,10 +54,10 @@ async def vector_search(query: str, k: int = 10, require_photo: bool = False) ->
         # Получаем больше товаров для фильтрации по фото если требуется
     except Exception as e:
         logger.error(f"Ошибка при поиске по запросу '{query}': {e}", exc_info=True)
-        return "Товары по вашему запросу не найдены."
+        return "Товары по вашему запросу не найдены.", []
 
     if not documents:
-        return "Товары по вашему запросу не найдены."
+        return "Товары по вашему запросу не найдены.", []
 
     # Фильтрация по наличию фото ДО обработки результатов (если требуется)
     if require_photo:
@@ -64,7 +66,7 @@ async def vector_search(query: str, k: int = 10, require_photo: bool = False) ->
             if doc.metadata.get('photo')
         ]
         if not documents:
-            return "Товары с фотографиями по вашему запросу не найдены."
+            return "Товары с фотографиями по вашему запросу не найдены.", []
 
     documents = documents[:k]
     products = []
@@ -79,13 +81,13 @@ async def vector_search(query: str, k: int = 10, require_photo: bool = False) ->
         })
 
     result_text, product_ids = await format_products_list(products)
-    ids_section = create_product_ids_section(product_ids)
+    
+    # Возвращаем кортеж: (текст, artifact с product_ids)
+    return f"Найдено товаров: {len(documents)}\n\n{result_text}", product_ids
 
-    return f"Найдено товаров: {len(documents)}\n\n{result_text}{ids_section}"
 
-
-@tool
-async def get_random_products(limit: int = 10) -> str:
+@tool(response_format="content_and_artifact")
+async def get_random_products(limit: int = 10) -> Tuple[str, List[int]]:
     """Получает случайные товары из ассортимента (FALLBACK инструмент).
 
     НАЗНАЧЕНИЕ: Получает случайные товары из ассортимента (FALLBACK инструмент)
@@ -100,7 +102,7 @@ async def get_random_products(limit: int = 10) -> str:
         limit: Количество товаров для возврата (по умолчанию 10)
 
     Returns:
-        Список случайных товаров с ID в секции [PRODUCT_IDS]
+        Кортеж (текст с результатами, список ID товаров как artifact)
     """
     # Лимиты управляются через SYSTEM_PROMPT из БД, принимаем любой limit
 
@@ -108,16 +110,16 @@ async def get_random_products(limit: int = 10) -> str:
         json_result = await get_random_products_db(limit)
 
         if not json_result:
-            return "Товары не найдены."
+            return "Товары не найдены.", []
 
         result_text, product_ids = await format_products_list(json_result)
-        ids_section = create_product_ids_section(product_ids)
 
-        return f"Найдено товаров: {len(json_result)}\n\n{result_text}{ids_section}"
+        # Возвращаем кортеж: (текст, artifact с product_ids)
+        return f"Найдено товаров: {len(json_result)}\n\n{result_text}", product_ids
 
     except RuntimeError as e:
         logger.error(f"Ошибка подключения к базе данных: {e}")
-        return "Не настроено подключение к базе данных."
+        return "Не настроено подключение к базе данных.", []
     except Exception as e:
         logger.error(f"Ошибка при получении случайных товаров: {e}")
-        return f"Ошибка при получении товаров: {str(e)}"
+        return f"Ошибка при получении товаров: {str(e)}", []

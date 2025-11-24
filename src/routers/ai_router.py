@@ -187,15 +187,12 @@ async def init_conversation_background(request: InitConverastionRequest):
             )
             welcome_input = ""
         else:
-            # Подставляем номер телефона клиента в промпт, если там есть плейсхолдер
             welcome_input = welcome_input.replace("{client_phone}", request.client_phone)
-            # Не логируем загрузку промпта - это не важно
 
         response_text = await agent.run(
             user_input=welcome_input,
             client_phone=request.client_phone,
             topic=request.topic,
-            is_init_message=True,
             endpoint_name="initConversation",
         )
 

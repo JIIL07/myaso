@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import logging
 from datetime import date
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelCallLimitMiddleware
@@ -30,7 +30,6 @@ from src.config.constants import (
 from src.config.settings import settings
 from src.database.queries.clients_queries import get_client_is_friend
 from src.utils.callbacks.langfuse_callback import LangfuseHandler
-from src.utils.callbacks.reasoning_logger import ReasoningLogger
 from src.utils.prompts import (
     build_prompt_with_context,
     get_all_system_values,
@@ -40,14 +39,14 @@ from src.utils.prompts import (
 from .base_agent import BaseAgent
 from .tools.client_tools import get_client_profile
 from .tools.context_tools import (
-    clear_agent_context,
-    create_context_tools,
-    get_is_init_message,
-    get_require_photo,
+    get_conversation_context,
+    save_product_ids_to_context,
+    set_photo_requirement,
 )
-from .tools.media_tools import create_media_tools
+from .tools.media_tools import show_product_photos
 from .tools.product_tools import get_random_products, vector_search
 from .tools.sql_tools import create_sql_tools
+from .tools.context_vars import client_phone_context
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +138,7 @@ class ProductAgent(BaseAgent):
                 raise ValueError(f"Не удалось инициализировать LLM: {e}") from e
 
         if tools is None:
+            # Базовые инструменты (все статические, используют contextvars для client_phone)
             tools = [
                 get_client_profile,
                 vector_search,
@@ -311,6 +311,22 @@ class ProductAgent(BaseAgent):
 
         return base_prompt, system_vars, client_info, chat_history
 
+    def _is_first_message(self, chat_history: List[BaseMessage]) -> bool:
+        """Определяет, является ли это первым сообщением в разговоре.
+
+        Args:
+            chat_history: История сообщений
+
+        Returns:
+            True если это первое сообщение (нет HumanMessage в истории), False иначе
+        """
+        # Проверяем наличие HumanMessage в истории
+        # Если нет HumanMessage - это первое сообщение
+        for msg in chat_history:
+            if isinstance(msg, HumanMessage):
+                return False
+        return True
+
     def _prepare_messages(
         self,
         user_input: str,
@@ -419,7 +435,7 @@ class ProductAgent(BaseAgent):
         self,
         user_input: str,
         response_text: str,
-        is_init_message: bool,
+        chat_history: List[BaseMessage],
         client_phone: str,
     ) -> None:
         """Сохраняет сообщения в память.
@@ -427,7 +443,7 @@ class ProductAgent(BaseAgent):
         Args:
             user_input: Текст запроса пользователя
             response_text: Текст ответа агента
-            is_init_message: Если True, не сохраняет user_input
+            chat_history: История сообщений для определения первого сообщения
             client_phone: Номер телефона клиента
         """
         if self.memory is None:
@@ -438,7 +454,9 @@ class ProductAgent(BaseAgent):
                 logger.warning(f"[ProductAgent] Память не инициализирована для {client_phone}, пропускаем сохранение")
                 return
 
-            if not is_init_message:
+            # Не сохраняем user_input если это первое сообщение
+            is_first = self._is_first_message(chat_history)
+            if not is_first:
                 await self.memory.add_messages([HumanMessage(content=user_input)])
             await self.memory.add_messages([AIMessage(content=response_text)])
         except Exception as e:
@@ -449,7 +467,6 @@ class ProductAgent(BaseAgent):
         user_input: str,
         client_phone: str,
         topic: Optional[str] = None,
-        is_init_message: bool = False,
         endpoint_name: Optional[str] = None,
     ) -> str:
         """Запускает агента для обработки запроса пользователя.
@@ -462,7 +479,6 @@ class ProductAgent(BaseAgent):
             user_input: Текст запроса пользователя
             client_phone: Номер телефона клиента
             topic: Тема диалога для загрузки промпта из БД (опционально)
-            is_init_message: Если True, не сохраняет user_input в память (для системных промптов init)
             endpoint_name: Имя endpoint для трейсинга
 
         Returns:
@@ -512,30 +528,28 @@ class ProductAgent(BaseAgent):
 
             input_with_context = self._prepare_messages(user_input, chat_history)
 
-            # Очищаем контекст перед новым запросом
-            clear_agent_context(client_phone)
+            # Загружаем контекст агента (будет загружен из БД или кэша)
+            # Контекст автоматически сохраняется через инструменты при изменениях
+            from .tools.context_tools import get_agent_context_async
+            await get_agent_context_async(client_phone)  # Загружаем в кэш
             
-            # Устанавливаем начальный контекст если это init message
-            if is_init_message:
-                context_tools = create_context_tools(client_phone)
-                # Устанавливаем контекст через tool (агент может это сделать сам, но для init мы делаем заранее)
-                from .tools.context_tools import get_agent_context
-                get_agent_context(client_phone)["is_init_message"] = True
-            else:
-                context_tools = create_context_tools(client_phone)
-
+            # Определяем, является ли это первым сообщением
+            is_first = self._is_first_message(chat_history)
+            
+            # Устанавливаем client_phone в контекст для статических инструментов
+            client_phone_context.set(client_phone)
+            
+            # Статические инструменты (используют contextvars для получения client_phone)
+            context_tools = [set_photo_requirement, get_conversation_context]
             sql_tools = create_sql_tools()
-            media_tools = create_media_tools(
-                client_phone=client_phone,
-                is_init_message=get_is_init_message(client_phone)
-            )
+            media_tools = [show_product_photos]
+            
+            # Все инструменты теперь статические
             agent_tools = self.tools + sql_tools + media_tools + context_tools
 
-            reasoning_logger = ReasoningLogger(client_phone=client_phone)
             callbacks_list = [
                 langfuse_handler,
                 StdOutCallbackHandler(),
-                reasoning_logger,
             ]
 
             config: RunnableConfig = {
@@ -567,6 +581,9 @@ class ProductAgent(BaseAgent):
                 error_msg = f"Ошибка при выполнении агента: {str(e)}"
                 logger.error(f"[ProductAgent.run] Ошибка агента: {error_msg}", exc_info=True)
                 raise Exception(error_msg) from e
+            finally:
+                # Очищаем контекст после выполнения
+                client_phone_context.set('')
 
             response_text = self._extract_response(result)
 
@@ -574,29 +591,42 @@ class ProductAgent(BaseAgent):
             if messages_result:
                 tool_messages = [msg for msg in messages_result if isinstance(msg, ToolMessage)]
                 steps_count = len(tool_messages) if tool_messages else 0
+                
+                # Обрабатываем artifacts из ToolMessage и сохраняем product_ids в context7
+                for tool_msg in tool_messages:
+                    # Проверяем наличие artifact в ToolMessage
+                    if hasattr(tool_msg, 'artifact') and tool_msg.artifact is not None:
+                        # Проверяем, что это список ID товаров
+                        if isinstance(tool_msg.artifact, list) and len(tool_msg.artifact) > 0:
+                            # Проверяем, что все элементы - числа
+                            if all(isinstance(x, int) for x in tool_msg.artifact):
+                                try:
+                                    await save_product_ids_to_context(client_phone, tool_msg.artifact)
+                                    tool_name = getattr(tool_msg, 'name', 'unknown')
+                                    logger.info(
+                                        f"[ProductAgent.run] Сохранено {len(tool_msg.artifact)} product_ids "
+                                        f"в context7 для {client_phone} из инструмента {tool_name}"
+                                    )
+                                except Exception as e:
+                                    logger.error(
+                                        f"[ProductAgent.run] Ошибка сохранения product_ids в context7: {e}",
+                                        exc_info=True
+                                    )
 
-                try:
-                    summary = reasoning_logger.get_summary()
+                if steps_count == 0:
+                    logger.warning(
+                        f"[ProductAgent.run] ⚠️ НЕТ ВЫЗОВОВ ИНСТРУМЕНТОВ для {client_phone}: "
+                        f"агент ответил БЕЗ вызова инструментов! "
+                        f"user_input='{user_input[:200]}'"
+                    )
+                else:
+                    logger.info(
+                        f"[ProductAgent.run] ✅ Запрос обработан для {client_phone}: "
+                        f"использовано {steps_count} инструмент(ов), "
+                        f"response_length={len(response_text)}"
+                    )
 
-                    if steps_count == 0:
-                        logger.warning(
-                            f"[ProductAgent.run] ⚠️ НЕТ ВЫЗОВОВ ИНСТРУМЕНТОВ для {client_phone}: "
-                            f"агент ответил БЕЗ вызова инструментов! "
-                            f"user_input='{user_input[:200]}', "
-                            f"LLM вызовов={summary['llm_calls']}, "
-                            f"без инструментов={summary['llm_calls_without_tools']}"
-                        )
-                    else:
-                        logger.info(
-                            f"[ProductAgent.run] ✅ Запрос обработан для {client_phone}: "
-                            f"использовано {steps_count} инструмент(ов), "
-                            f"LLM вызовов={summary['llm_calls']}, "
-                            f"response_length={len(response_text)}"
-                        )
-                except Exception:
-                    pass
-
-            await self._save_to_memory(user_input, response_text, is_init_message, client_phone)
+            await self._save_to_memory(user_input, response_text, chat_history, client_phone)
 
             langfuse_handler.save_conversation_to_langfuse()
 

@@ -40,3 +40,9 @@ DANGEROUS_SQL_KEYWORDS = [
     "ALTER",
     "CREATE",
 ]
+
+# Константы для RAG контекста
+ENABLE_QUERY_REWRITING = False  # Включить query rewriting на основе истории
+ENABLE_RERANKING = False  # Включить reranking результатов поиска
+CONTEXT_CACHE_TTL_SECONDS = 300  # TTL для кэша контекста (5 минут)
+MAX_HISTORY_FOR_REWRITING = 10  # Максимальное количество сообщений из истории для rewriting

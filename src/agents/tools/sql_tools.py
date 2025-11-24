@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
@@ -23,7 +23,7 @@ from src.utils.prompts import (
     escape_prompt_variables,
     get_prompt,
 )
-from src.utils.product_formatter import format_products_list, create_product_ids_section
+from src.utils.product_formatter import format_products_list
 
 logger = logging.getLogger(__name__)
 
@@ -178,10 +178,44 @@ async def _generate_sql_from_text_impl(
             )
             raise ValueError(f"Обнаружена опасная SQL команда: {keyword}")
 
+    # Заменяем LIKE на ILIKE для регистронезависимого поиска
+    sql_query = _replace_like_with_ilike(sql_query)
+
     # Валидация только для WHERE условий (не для полных SELECT)
     if not sql_query.upper().strip().startswith("SELECT"):
         validate_sql_conditions(sql_query)
 
+    return sql_query
+
+
+def _replace_like_with_ilike(sql_query: str) -> str:
+    """Заменяет LIKE на ILIKE в SQL запросе для регистронезависимого поиска.
+    
+    Также заменяет = на ILIKE для текстовых полей (supplier_name, title, from_region).
+    
+    Args:
+        sql_query: SQL запрос для обработки
+        
+    Returns:
+        SQL запрос с замененными LIKE на ILIKE
+    """
+    # Список текстовых полей, для которых нужно использовать ILIKE вместо =
+    text_fields = ["supplier_name", "title", "from_region"]
+    
+    # Заменяем LIKE на ILIKE (регистронезависимо)
+    # Используем регулярное выражение для замены только ключевого слова LIKE, не затрагивая ILIKE
+    sql_query = re.sub(r'\bLIKE\b', 'ILIKE', sql_query, flags=re.IGNORECASE)
+    
+    # Заменяем = на ILIKE для текстовых полей
+    # Паттерн: поле = 'значение' или поле = "значение" -> поле ILIKE 'значение'
+    for field in text_fields:
+        # Заменяем field = 'value' на field ILIKE 'value'
+        # Учитываем возможные пробелы и одинарные/двойные кавычки
+        # Паттерн ищет: поле = 'значение' или поле = "значение"
+        pattern = rf'\b{re.escape(field)}\s*=\s*([\'"])([^\1]+)\1'
+        replacement = rf'{field} ILIKE \1\2\1'
+        sql_query = re.sub(pattern, replacement, sql_query, flags=re.IGNORECASE)
+    
     return sql_query
 
 def create_sql_tools():
@@ -221,11 +255,11 @@ def create_sql_tools():
             topic=topic,
         )
 
-    @tool
+    @tool(response_format="content_and_artifact")
     async def execute_sql_query(
         sql_query: str, 
         limit: int = DEFAULT_SQL_LIMIT
-    ) -> str:
+    ) -> Tuple[str, List[int]]:
         """
         Универсальный инструмент для выполнения ЛЮБЫХ SQL SELECT запросов.
 
@@ -240,25 +274,28 @@ def create_sql_tools():
         1. Используй ТОЛЬКО SELECT запросы!
         2. НЕ используй DROP/DELETE/UPDATE/INSERT/ALTER/CREATE/TRUNCATE/EXECUTE — они запрещены.
 
-    Args:
+        Args:
             sql_query: SQL запрос (WHERE условия или полный SELECT запрос)
-        limit: Максимальное количество товаров для возврата (по умолчанию 50)
+            limit: Максимальное количество товаров для возврата (по умолчанию 50)
 
-    Returns:
-            Список найденных товаров с ID в секции [PRODUCT_IDS]
+        Returns:
+            Кортеж (текст с результатами, список ID товаров как artifact)
         """
         sql_query_clean = sql_query.strip()
         if not sql_query_clean:
-            return "SQL запрос пустой."
+            return "SQL запрос пустой.", []
 
         if sql_query_clean.endswith(";"):
             sql_query_clean = sql_query_clean[:-1].strip()
+
+        # Заменяем LIKE на ILIKE для регистронезависимого поиска
+        sql_query_clean = _replace_like_with_ilike(sql_query_clean)
 
         upper_sql = sql_query_clean.upper()
         
         for keyword in DANGEROUS_SQL_KEYWORDS:
             if re.search(rf"\b{keyword}\b", upper_sql):
-                return f"В запросе обнаружена запрещенная команда: {keyword}"
+                return f"В запросе обнаружена запрещенная команда: {keyword}", []
 
         is_full_query = upper_sql.startswith("SELECT")
         
@@ -277,10 +314,10 @@ def create_sql_tools():
                     result = await conn.fetch(final_query)
             except Exception as e:
                 logger.error("[execute_sql_query] Ошибка выполнения SQL: %s", e, exc_info=True)
-                return f"Не удалось выполнить SQL запрос: {e}"
+                return f"Не удалось выполнить SQL запрос: {e}", []
 
             if not result:
-                return "По указанному запросу ничего не найдено."
+                return "По указанному запросу ничего не найдено.", []
 
             json_result = records_to_json(result)
             has_more = False
@@ -291,29 +328,28 @@ def create_sql_tools():
                 validate_sql_conditions(sql_conditions)
             except ValueError as e:
                 logger.error(f"SQL условия не прошли валидацию: {e}. Условия: {sql_conditions[:200]}")
-                return f"SQL условия не прошли валидацию: {e}"
+                return f"SQL условия не прошли валидацию: {e}", []
 
             try:
                 json_result, has_more = await get_products_by_sql_conditions(sql_conditions, limit)
             except RuntimeError as e:
                 logger.error(f"Ошибка подключения к базе данных: {e}")
-                return "Не настроено подключение к базе данных."
+                return "Не настроено подключение к базе данных.", []
             except Exception as e:
                 logger.error(f"Ошибка при получении товаров по SQL условиям: {e}", exc_info=True)
                 logger.error(f"SQL условия, которые вызвали ошибку: {sql_conditions[:200]}")
-                return "Товары по указанным условиям не найдены."
+                return "Товары по указанным условиям не найдены.", []
 
             if not json_result:
-                return "Товары по указанным условиям не найдены."
+                return "Товары по указанным условиям не найдены.", []
 
         result_text, product_ids = await format_products_list(json_result)
-        ids_section = create_product_ids_section(product_ids)
 
         if is_full_query:
-            return f"Найдено строк: {len(json_result)}\n\n{result_text}{ids_section}"
+            return f"Найдено строк: {len(json_result)}\n\n{result_text}", product_ids
         else:
             more_text = "\n\n⚠️ В базе данных есть ещё товары, показываем первые 50. Используйте более конкретные критерии поиска для уточнения." if has_more else ""
-        return f"Найдено товаров: {len(json_result)}{more_text}\n\n{result_text}{ids_section}"
+            return f"Найдено товаров: {len(json_result)}{more_text}\n\n{result_text}", product_ids
 
     @tool
     async def get_table_schema() -> str:

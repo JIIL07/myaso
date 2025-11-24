@@ -13,7 +13,8 @@ from langchain_core.tools import tool
 from src.config.constants import HTTP_TIMEOUT_SECONDS
 from src.config.settings import settings
 from src.utils import get_supabase_client
-from src.agents.tools.context_tools import get_is_init_message
+from src.agents.tools.context_vars import get_client_phone
+from src.agents.tools.context_tools import get_product_ids_from_context
 
 logger = logging.getLogger(__name__)
 
@@ -129,124 +130,123 @@ def _parse_product_ids(product_ids: Union[List[int], List[str], str]) -> List[in
     return []
 
 
-def create_media_tools(client_phone: str, is_init_message: bool = False):
-    """Создает инструменты для работы с медиа.
+@tool
+async def show_product_photos(product_ids: Any = None) -> str:
+    """Отправляет фотографии товаров клиенту через WhatsApp.
+
+    Если product_ids не указан, использует ID из контекста агента (context7).
+    Если указан, использует переданные ID (для обратной совместимости).
+
+    НАЗНАЧЕНИЕ: Отправляет фотографии товаров клиенту через WhatsApp
 
     Args:
-        client_phone: Номер телефона клиента
-        is_init_message: Если True, это init conversation (используется для обратной совместимости)
+        product_ids: ID товаров (опционально). Если None, берется из контекста агента.
+        Может быть:
+        - None - берется из контекста агента
+        - Список чисел: [1, 2, 3]
+        - Строка с JSON: '{"product_ids": [1, 2, 3]}'
+        - Строка с [PRODUCT_IDS]: '[PRODUCT_IDS]{"product_ids": [1, 2, 3]}[/PRODUCT_IDS]'
 
     Returns:
-        Список инструментов для работы с медиа
+        Статус отправки фотографий (количество отправленных, не отправленных, не найденных товаров)
     """
-    @tool
-    async def show_product_photos(product_ids: Any) -> str:
-        """Отправляет фотографии товаров клиенту через WhatsApp.
-
-        НАЗНАЧЕНИЕ: Отправляет фотографии товаров клиенту через WhatsApp
-
-        Args:
-            product_ids: ID товаров для отправки фото.
-            Может быть:
-            - Список чисел: [1, 2, 3]
-            - Строка с JSON: '{"product_ids": [1, 2, 3]}'
-            - Строка с [PRODUCT_IDS]: '[PRODUCT_IDS]{"product_ids": [1, 2, 3]}[/PRODUCT_IDS]'
-            Извлеки ID из секции [PRODUCT_IDS] ответа инструментов поиска (vector_search, execute_sql_query, get_random_products).
-
-        Returns:
-            Статус отправки фотографий (количество отправленных, не отправленных, не найденных товаров)
-        """
-        logger.info(f"[show_product_photos] Получены product_ids (тип: {type(product_ids)}): {product_ids}")
-        
-        # Парсим ID товаров из различных форматов
+    client_phone = get_client_phone()
+    logger.info(f"[show_product_photos] Получены product_ids (тип: {type(product_ids)}): {product_ids}")
+    
+    # Если product_ids не указан, берем из контекста
+    if product_ids is None:
+        parsed_ids = get_product_ids_from_context(client_phone)
+        if not parsed_ids:
+            return "Нет сохраненных ID товаров для отправки фотографий. Используйте инструменты поиска товаров (vector_search, execute_sql_query, get_random_products) для поиска товаров."
+        logger.info(f"[show_product_photos] Используются product_ids из контекста: {parsed_ids}")
+    else:
+        # Парсим ID товаров из различных форматов (для обратной совместимости)
         parsed_ids = _parse_product_ids(product_ids)
-        
-        has_photo = []
-        no_photo = []
-        not_found = []
+    
+    has_photo = []
+    no_photo = []
+    not_found = []
 
-        supabase = await get_supabase_client()
+    supabase = await get_supabase_client()
 
-        for product_id in parsed_ids:
-            try:
-                result = (
-                    await supabase.table("products")
-                    .select("*")
-                    .eq("id", product_id)
-                    .execute()
-                )
+    for product_id in parsed_ids:
+        try:
+            result = (
+                await supabase.table("products")
+                .select("*")
+                .eq("id", product_id)
+                .execute()
+            )
 
-                if not result.data or len(result.data) == 0:
-                    not_found.append(product_id)
-                    logger.warning(f"[show_product_photos] Товар с ID {product_id} не найден в базе данных")
-                    continue
+            if not result.data or len(result.data) == 0:
+                not_found.append(product_id)
+                logger.warning(f"[show_product_photos] Товар с ID {product_id} не найден в базе данных")
+                continue
 
-                product = result.data[0]
-                photo_url = product.get("photo")
-                product_title = product.get("title", f"Товар #{product_id}")
+            product = result.data[0]
+            photo_url = product.get("photo")
+            product_title = product.get("title", f"Товар #{product_id}")
 
-                if photo_url:
-                    send_success = await send_whatsapp_image(client_phone, photo_url, product_title)
-                    if send_success:
-                        has_photo.append(product_id)
-                        logger.info(
-                            f"[show_product_photos] Фото успешно отправлено для товара ID {product_id} "
-                            f"('{product_title}') на номер {client_phone}"
-                        )
-                    else:
-                        no_photo.append(product_id)
-                        logger.warning(
-                            f"[show_product_photos] Не удалось отправить фото для товара ID {product_id} "
-                            f"('{product_title}') на номер {client_phone}"
-                        )
+            if photo_url:
+                send_success = await send_whatsapp_image(client_phone, photo_url, product_title)
+                if send_success:
+                    has_photo.append(product_id)
+                    logger.info(
+                        f"[show_product_photos] Фото успешно отправлено для товара ID {product_id} "
+                        f"('{product_title}') на номер {client_phone}"
+                    )
                 else:
                     no_photo.append(product_id)
-                    logger.info(f"[show_product_photos] Товар ID {product_id} ('{product_title}') найден, но нет фотографии")
+                    logger.warning(
+                        f"[show_product_photos] Не удалось отправить фото для товара ID {product_id} "
+                        f"('{product_title}') на номер {client_phone}"
+                    )
+            else:
+                no_photo.append(product_id)
+                logger.info(f"[show_product_photos] Товар ID {product_id} ('{product_title}') найден, но нет фотографии")
 
-            except Exception as e:
-                logger.error(
-                    f"[show_product_photos] Ошибка при получении товара ID {product_id}: {e}",
-                    exc_info=True
-                )
-                not_found.append(product_id)
+        except Exception as e:
+            logger.error(
+                f"[show_product_photos] Ошибка при получении товара ID {product_id}: {e}",
+                exc_info=True
+            )
+            not_found.append(product_id)
 
-        result_parts = []
-        
-        if has_photo:
-            result_parts.append(
-                f"✅ УСПЕШНО ОТПРАВЛЕНО: Фотографии {len(has_photo)} товаров успешно отправлены клиенту через WhatsApp. "
-                f"Клиент получил эти фотографии."
-            )
-        
-        if no_photo:
-            result_parts.append(
-                f"❌ НЕ ОТПРАВЛЕНО: Не удалось отправить фотографии {len(no_photo)} товаров. "
-                f"Товары найдены в базе данных, но фотографии либо отсутствуют, либо произошла ошибка при отправке. "
-                f"\n\nКРИТИЧЕСКИ ВАЖНО: Несмотря на ошибку отправки фото, ты ОБЯЗАТЕЛЬНО ДОЛЖЕН:\n"
-                f"1. НЕ говорить что фото отправлены\n"
-                f"2. ВСЕГДА предложить товары текстом с полной информацией (название, поставщик, цена, регион)\n"
-                f"3. Сообщить что фото временно недоступны, но товары есть в наличии"
-            )
-        
-        if not_found:
-            result_parts.append(
-                f"⚠️ НЕ НАЙДЕНО: {len(not_found)} товаров не найдены в базе данных. "
-                f"Эти товары отсутствуют в каталоге."
-            )
-
-        result_text = (
-            "\n".join(result_parts)
-            if result_parts
-            else "Нет товаров для отправки фотографий."
+    result_parts = []
+    
+    if has_photo:
+        result_parts.append(
+            f"✅ УСПЕШНО ОТПРАВЛЕНО: Фотографии {len(has_photo)} товаров успешно отправлены клиенту через WhatsApp. "
+            f"Клиент получил эти фотографии."
+        )
+    
+    if no_photo:
+        result_parts.append(
+            f"❌ НЕ ОТПРАВЛЕНО: Не удалось отправить фотографии {len(no_photo)} товаров. "
+            f"Товары найдены в базе данных, но фотографии либо отсутствуют, либо произошла ошибка при отправке. "
+            f"\n\nКРИТИЧЕСКИ ВАЖНО: Несмотря на ошибку отправки фото, ты ОБЯЗАТЕЛЬНО ДОЛЖЕН:\n"
+            f"1. НЕ говорить что фото отправлены\n"
+            f"2. ВСЕГДА предложить товары текстом с полной информацией (название, поставщик, цена, регион)\n"
+            f"3. Сообщить что фото временно недоступны, но товары есть в наличии"
+        )
+    
+    if not_found:
+        result_parts.append(
+            f"⚠️ НЕ НАЙДЕНО: {len(not_found)} товаров не найдены в базе данных. "
+            f"Эти товары отсутствуют в каталоге."
         )
 
-        logger.info(
-            f"[show_product_photos] Итоговый результат для {client_phone}: "
-            f"отправлено={len(has_photo)} (IDs: {has_photo}), "
-            f"не отправлено={len(no_photo)} (IDs: {no_photo}), "
-            f"не найдено={len(not_found)} (IDs: {not_found})"
-        )
+    result_text = (
+        "\n".join(result_parts)
+        if result_parts
+        else "Нет товаров для отправки фотографий."
+    )
 
-        return result_text
+    logger.info(
+        f"[show_product_photos] Итоговый результат для {client_phone}: "
+        f"отправлено={len(has_photo)} (IDs: {has_photo}), "
+        f"не отправлено={len(no_photo)} (IDs: {no_photo}), "
+        f"не найдено={len(not_found)} (IDs: {not_found})"
+    )
 
-    return [show_product_photos]
+    return result_text
