@@ -27,7 +27,6 @@ from src.config.constants import (
     MAX_AGENT_EXECUTION_TIME,
     MAX_AGENT_ITERATIONS,
 )
-from src.config.messages_constants import GREETING_WORDS
 from src.config.settings import settings
 from src.database.queries.clients_queries import get_client_is_friend
 from src.utils.callbacks.langfuse_callback import LangfuseHandler
@@ -52,34 +51,6 @@ from .tools.sql_tools import create_sql_tools
 from .tools.context_vars import client_phone_context
 
 logger = logging.getLogger(__name__)
-
-
-def is_greeting_message(message: str) -> bool:
-    """Проверяет, содержит ли сообщение приветствие.
-    
-    Args:
-        message: Текст сообщения
-        
-    Returns:
-        True если сообщение содержит приветствие, False иначе
-    """
-    if not message:
-        return False
-    
-    message_lower = message.lower().strip()
-    
-    for greeting in GREETING_WORDS:
-        if message_lower.startswith(greeting):
-            remaining = message_lower[len(greeting):].strip()
-            if not remaining or remaining[0] in [',', '.', '!', '?', ' ', '\n']:
-                return True
-    
-    if len(message_lower.split()) <= 5:
-        for greeting in GREETING_WORDS:
-            if f" {greeting} " in f" {message_lower} ":
-                return True
-    
-    return False
 
 
 class ProductAgent(BaseAgent):
@@ -313,57 +284,21 @@ class ProductAgent(BaseAgent):
 
         return base_prompt, system_vars, client_info, chat_history
 
-    def _is_first_message(self, chat_history: List[BaseMessage]) -> bool:
-        """Определяет, является ли это первым сообщением в разговоре.
-
-        Args:
-            chat_history: История сообщений
-
-        Returns:
-            True если это первое сообщение (нет HumanMessage в истории), False иначе
-        """
-        for msg in chat_history:
-            if isinstance(msg, HumanMessage):
-                return False
-        return True
-
     def _prepare_messages(
         self,
         user_input: str,
         chat_history: List[BaseMessage],
     ) -> str:
-        """Подготавливает сообщения с контекстом для агента.
+        """Подготавливает сообщения для агента.
 
         Args:
             user_input: Текст запроса пользователя
-            chat_history: История сообщений
+            chat_history: История сообщений (передается агенту напрямую)
 
         Returns:
-            Текст запроса с добавленным контекстом
+            Текст запроса пользователя без изменений
         """
-        is_first = self._is_first_message(chat_history)
-        is_second = len(chat_history) == 1 and isinstance(chat_history[0], AIMessage)
-        
-        client_greeted = is_greeting_message(user_input)
-        
-        context_parts = []
-        
-        if is_first:
-            # Первое сообщение - всегда приветствуем
-            if not client_greeted:
-                context_parts.append("ВАЖНО: Это первое сообщение в разговоре. Обязательно поздоровайся с клиентом.")
-        elif is_second:
-            # Второе сообщение
-            if client_greeted:
-                context_parts.append("ВАЖНО: Клиент поздоровался. Поздоровайся в ответ кратко, затем переходи к делу.")
-            else:
-                context_parts.append("ВАЖНО: Это второе сообщение. НЕ используй приветствие, сразу переходи к делу.")
-        elif client_greeted:
-            # Клиент поздоровался в середине разговора
-            context_parts.append("ВАЖНО: Клиент поздоровался. Ответь кратко на приветствие, затем продолжай общение.")
-        
-        if context_parts:
-            return user_input + "\n\n" + "\n".join(context_parts)
+        # Агент сам определяет контекст на основе истории сообщений
         return user_input
 
     async def _execute_agent(
@@ -515,9 +450,8 @@ class ProductAgent(BaseAgent):
                 logger.warning(f"[ProductAgent] Память не инициализирована для {client_phone}, пропускаем сохранение")
                 return
 
-            is_first = self._is_first_message(chat_history)
-            if not is_first:
-                await self.memory.add_messages([HumanMessage(content=user_input)])
+            # Сохраняем оба сообщения - агент сам определит контекст
+            await self.memory.add_messages([HumanMessage(content=user_input)])
             await self.memory.add_messages([AIMessage(content=response_text)])
         except Exception as e:
             logger.error(f"[ProductAgent] Не удалось сохранить в память для {client_phone}: {e}", exc_info=True)
@@ -559,35 +493,20 @@ class ProductAgent(BaseAgent):
                 topic, client_phone
             )
 
-            from src.config.messages_constants import (
-                PROMPT_TOPIC_PHOTO_SENDING_INSTRUCTIONS,
-                PROMPT_TOPIC_SQL_GENERATION_RULES,
-                PROMPT_TOPIC_TOOL_USAGE_GUIDELINES,
-                PROMPT_TOPIC_VECTOR_SEARCH_INSTRUCTIONS,
-            )
-
-            # Загружаем все инструкции из БД
-            instruction_topics = [
-                "Init Conversation Instructions",
-                "Tool Usage Instructions",
-                "Greeting Handling Instructions",
-                "Price Calculation Instructions",
-                "Response Formatting Instructions",
-                PROMPT_TOPIC_SQL_GENERATION_RULES,
-                PROMPT_TOPIC_VECTOR_SEARCH_INSTRUCTIONS,
-                PROMPT_TOPIC_PHOTO_SENDING_INSTRUCTIONS,
-                PROMPT_TOPIC_TOOL_USAGE_GUIDELINES,
-            ]
+            # Загружаем все инструкции из БД динамически
+            from src.utils.prompts import get_all_instruction_prompts
             
-            instructions = []
-            for instruction_topic in instruction_topics:
-                instruction = await get_prompt(instruction_topic)
-                if instruction:
-                    instructions.append(f"--- {instruction_topic} ---\n{instruction}")
+            instruction_prompts = await get_all_instruction_prompts()
             
-            if instructions:
-                instructions_text = "\n\n".join(instructions)
-                base_prompt = f"{base_prompt}\n\n{instructions_text}"
+            if instruction_prompts:
+                instructions = []
+                for topic, prompt in instruction_prompts.items():
+                    if prompt:
+                        instructions.append(f"--- {topic} ---\n{prompt}")
+                
+                if instructions:
+                    instructions_text = "\n\n".join(instructions)
+                    base_prompt = f"{base_prompt}\n\n{instructions_text}"
 
             final_prompt = build_prompt_with_context(
                 base_prompt=base_prompt,
@@ -600,8 +519,6 @@ class ProductAgent(BaseAgent):
 
             from .tools.context_tools import get_agent_context_async
             await get_agent_context_async(client_phone)
-            
-            is_first = self._is_first_message(chat_history)
             
             client_phone_context.set(client_phone)
             

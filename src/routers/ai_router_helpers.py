@@ -24,35 +24,18 @@ async def prepare_user_input_for_agent(
 ) -> str:
     """Подготавливает пользовательский ввод для агента.
     
+    Инструкции загружаются динамически из БД и добавляются в системный промпт,
+    поэтому здесь просто возвращаем user_input без изменений.
+    
     Args:
         user_input: Исходный текст пользователя
-        is_init: True если это инициализация беседы
-        topic: Тема беседы для загрузки инструкций из БД
+        is_init: True если это инициализация беседы (не используется, оставлено для совместимости)
+        topic: Тема беседы (не используется, оставлено для совместимости)
     
     Returns:
-        Подготовленный текст с инструкциями
+        Текст запроса пользователя без изменений
     """
-    if is_init:
-        # Для init используем промпт из БД
-        prompt_topic = "Init Conversation Instructions"
-        instructions = await get_prompt(prompt_topic)
-        if instructions:
-            return f"{user_input}\n\n{instructions}"
-        return user_input
-    
-    # Для обычных сообщений загружаем инструкции из БД
-    prompt_topic = "Tool Usage Instructions"
-    instructions = await get_prompt(prompt_topic)
-    
-    if instructions:
-        return f"{user_input}\n\n{instructions}"
-    
-    # Fallback на старую логику
-    return (
-        f"{user_input}\n\n"
-        "ВАЖНО: Для ответа на этот запрос ОБЯЗАТЕЛЬНО используй доступные инструменты. "
-        "Не отвечай без вызова инструментов."
-    )
+    return user_input
 
 
 async def send_pricelist_if_needed(client_phone: str) -> None:

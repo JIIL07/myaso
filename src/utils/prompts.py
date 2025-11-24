@@ -95,6 +95,48 @@ async def get_system_value(topic: str) -> Optional[str]:
         return None
 
 
+async def get_all_instruction_prompts() -> Dict[str, str]:
+    """Загружает все промпты-инструкции из БД.
+    
+    Инструкциями считаются промпты, у которых topic содержит слово "Instruction" 
+    или начинается с "Instruction:".
+    
+    Returns:
+        Словарь {topic: prompt} со всеми инструкциями
+    """
+    try:
+        supabase = await get_supabase_client()
+        
+        # Загружаем все промпты
+        result = await supabase.table(TABLE_PROMPTS).select(
+            f"{COLUMN_TOPIC}, {COLUMN_PROMPT}"
+        ).execute()
+        
+        if not result.data:
+            return {}
+        
+        instructions = {}
+        for row in result.data:
+            topic = row.get(COLUMN_TOPIC, "")
+            prompt = row.get(COLUMN_PROMPT, "")
+            
+            # Фильтруем инструкции по паттерну в названии
+            if prompt and (
+                "Instruction" in topic or 
+                topic.startswith("Instruction:") or
+                "Instructions" in topic
+            ):
+                instructions[topic] = prompt
+                # Сохраняем в кэш
+                current_time = time.time()
+                _PROMPT_CACHE[topic] = (prompt, current_time)
+        
+        return instructions
+    except Exception as e:
+        logger.error(f"Ошибка при получении всех инструкций: {e}")
+        return {}
+
+
 async def get_all_system_values() -> Dict[str, str]:
     """Получает ВСЕ значения из таблицы myaso.system.
 
