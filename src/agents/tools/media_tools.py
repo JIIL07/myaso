@@ -134,7 +134,7 @@ def _parse_product_ids(product_ids: Union[List[int], List[str], str]) -> List[in
 async def show_product_photos(product_ids: Any = None) -> str:
     """Отправляет фотографии товаров клиенту через WhatsApp.
 
-    Если product_ids не указан, использует ID из контекста агента (context7).
+    Если product_ids не указан, использует ID из контекста агента (agent_context).
     Если указан, использует переданные ID (для обратной совместимости).
 
     НАЗНАЧЕНИЕ: Отправляет фотографии товаров клиенту через WhatsApp

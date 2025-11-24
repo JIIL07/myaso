@@ -11,10 +11,8 @@ from langchain_core.tools import tool
 
 from src.config.constants import CONTEXT_CACHE_TTL_SECONDS
 from src.database.queries.context_queries import (
-    clear_agent_context_from_db,
     get_agent_context_from_db,
     save_agent_context_to_db,
-    update_agent_context,
 )
 from src.agents.tools.context_vars import get_client_phone
 
@@ -99,50 +97,6 @@ async def _save_agent_context_async(client_phone: str, context_data: Dict[str, A
         _context_cache[client_phone] = (context_data, time.time())
     except Exception as e:
         logger.error(f"Ошибка при сохранении контекста для {client_phone}: {e}", exc_info=True)
-
-
-def clear_agent_context(client_phone: str) -> None:
-    """Очищает контекст агента для клиента (синхронная версия).
-
-    Args:
-        client_phone: Номер телефона клиента
-    """
-    # Удаляем из кэша
-    if client_phone in _context_cache:
-        del _context_cache[client_phone]
-    
-    # Очищаем в БД (асинхронно, но не ждем результата - fire and forget)
-    # В async контексте лучше использовать clear_agent_context_async
-    try:
-        loop = asyncio.get_event_loop()
-        if not loop.is_running():
-            loop.run_until_complete(clear_agent_context_from_db(client_phone))
-        else:
-            # Если loop уже запущен, создаем task, но не ждем его
-            # Это может не выполниться, но это приемлемо для очистки
-            asyncio.ensure_future(clear_agent_context_from_db(client_phone))
-    except (RuntimeError, AttributeError):
-        # Если нет event loop, просто очищаем кэш
-        pass
-    except Exception as e:
-        logger.error(f"Ошибка при очистке контекста для {client_phone}: {e}", exc_info=True)
-
-
-async def clear_agent_context_async(client_phone: str) -> None:
-    """Очищает контекст агента для клиента (асинхронная версия).
-
-    Args:
-        client_phone: Номер телефона клиента
-    """
-    # Удаляем из кэша
-    if client_phone in _context_cache:
-        del _context_cache[client_phone]
-    
-    # Очищаем в БД
-    try:
-        await clear_agent_context_from_db(client_phone)
-    except Exception as e:
-        logger.error(f"Ошибка при очистке контекста для {client_phone}: {e}", exc_info=True)
 
 
 @tool

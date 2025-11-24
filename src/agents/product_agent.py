@@ -579,11 +579,11 @@ class ProductAgent(BaseAgent):
                                     tool_name = getattr(tool_msg, 'name', 'unknown')
                                     logger.info(
                                         f"[ProductAgent.run] Сохранено {len(tool_msg.artifact)} product_ids "
-                                        f"в context7 для {client_phone} из инструмента {tool_name}"
+                                        f"в agent_context для {client_phone} из инструмента {tool_name}"
                                     )
                                 except Exception as e:
                                     logger.error(
-                                        f"[ProductAgent.run] Ошибка сохранения product_ids в context7: {e}",
+                                        f"[ProductAgent.run] Ошибка сохранения product_ids в agent_context: {e}",
                                         exc_info=True
                                     )
 
