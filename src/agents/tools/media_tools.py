@@ -250,3 +250,60 @@ async def show_product_photos(product_ids: Any = None) -> str:
     )
 
     return result_text
+
+
+@tool
+async def send_pricelist() -> str:
+    """Отправляет прайс-лист клиенту через WhatsApp.
+    
+    Используй этот инструмент когда:
+    - Клиент просит прайс-лист
+    - Клиент спрашивает про каталог товаров
+    - Нужно отправить полный список товаров с ценами
+    
+    Returns:
+        Статус отправки прайс-листа
+    """
+    from src.utils.prompts import get_system_value
+    from src.config.messages_constants import SYSTEM_VALUE_PRICELIST
+    from urllib.parse import urlparse
+    import os
+    
+    client_phone = get_client_phone()
+    
+    try:
+        pricelist_url = await get_system_value(SYSTEM_VALUE_PRICELIST)
+        if not pricelist_url:
+            return "Прайс-лист не настроен в системе. Сообщи клиенту, что прайс-лист временно недоступен."
+        
+        parsed_url = urlparse(pricelist_url)
+        file_path = parsed_url.path
+        _, file_extension = os.path.splitext(file_path)
+        
+        if file_extension:
+            file_extension = file_extension.lstrip('.').lower()
+        else:
+            file_extension = "xlsx"
+        
+        send_success = await send_whatsapp_image(
+            phone=client_phone,
+            file_url=pricelist_url,
+            caption=SYSTEM_VALUE_PRICELIST,
+            extension=file_extension,
+        )
+        
+        if send_success:
+            logger.info(f"[send_pricelist] Прайс-лист успешно отправлен для {client_phone}")
+            return "✅ Прайс-лист успешно отправлен клиенту через WhatsApp. Клиент получил файл с прайс-листом."
+        else:
+            logger.warning(f"[send_pricelist] Не удалось отправить прайс-лист для {client_phone}")
+            return (
+                "❌ Не удалось отправить прайс-лист. "
+                "Сообщи клиенту, что прайс-лист временно недоступен, но ты можешь помочь с поиском товаров."
+            )
+    except Exception as e:
+        logger.error(f"[send_pricelist] Ошибка отправки прайс-листа для {client_phone}: {e}", exc_info=True)
+        return (
+            "❌ Ошибка при отправке прайс-листа. "
+            "Сообщи клиенту, что прайс-лист временно недоступен, но ты можешь помочь с поиском товаров."
+        )

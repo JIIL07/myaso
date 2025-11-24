@@ -45,7 +45,8 @@ from .tools.context_tools import (
     save_product_ids_to_context,
     set_photo_requirement,
 )
-from .tools.media_tools import show_product_photos
+from .tools.media_tools import show_product_photos, send_pricelist
+from .tools.price_tools import calculate_product_price
 from .tools.product_tools import get_random_products, vector_search
 from .tools.sql_tools import create_sql_tools
 from .tools.context_vars import client_phone_context
@@ -68,8 +69,15 @@ def is_greeting_message(message: str) -> bool:
     message_lower = message.lower().strip()
     
     for greeting in GREETING_WORDS:
-        if message_lower.startswith(greeting) or f" {greeting} " in f" {message_lower} ":
-            return True
+        if message_lower.startswith(greeting):
+            remaining = message_lower[len(greeting):].strip()
+            if not remaining or remaining[0] in [',', '.', '!', '?', ' ', '\n']:
+                return True
+    
+    if len(message_lower.split()) <= 5:
+        for greeting in GREETING_WORDS:
+            if f" {greeting} " in f" {message_lower} ":
+                return True
     
     return False
 
@@ -136,6 +144,7 @@ class ProductAgent(BaseAgent):
                 get_client_profile,
                 vector_search,
                 get_random_products,
+                calculate_product_price,
             ]
 
         super().__init__(model=llm, tools=tools, config=kwargs)
@@ -332,25 +341,27 @@ class ProductAgent(BaseAgent):
         Returns:
             Текст запроса с добавленным контекстом
         """
-        is_second_message = False
-        if len(chat_history) == 1:
-            if isinstance(chat_history[0], AIMessage):
-                is_second_message = True
-        elif len(chat_history) == 2:
-            if isinstance(chat_history[0], AIMessage) and isinstance(chat_history[1], HumanMessage):
-                is_second_message = True
-
+        is_first = self._is_first_message(chat_history)
+        is_second = len(chat_history) == 1 and isinstance(chat_history[0], AIMessage)
+        
         client_greeted = is_greeting_message(user_input)
-
+        
         context_parts = []
-        if client_greeted:
-            if is_second_message:
-                context_parts.append("ВАЖНО: Это второе сообщение, но клиент поздоровался с тобой. Поздоровайся в ответ, затем продолжай общение.")
+        
+        if is_first:
+            # Первое сообщение - всегда приветствуем
+            if not client_greeted:
+                context_parts.append("ВАЖНО: Это первое сообщение в разговоре. Обязательно поздоровайся с клиентом.")
+        elif is_second:
+            # Второе сообщение
+            if client_greeted:
+                context_parts.append("ВАЖНО: Клиент поздоровался. Поздоровайся в ответ кратко, затем переходи к делу.")
             else:
-                context_parts.append("ВАЖНО: Клиент поздоровался с тобой. Поздоровайся в ответ, затем продолжай общение.")
-        elif is_second_message:
-            context_parts.append("ВАЖНО: Это второе сообщение в разговоре. НЕ используй приветствие, сразу переходи к делу.")
-
+                context_parts.append("ВАЖНО: Это второе сообщение. НЕ используй приветствие, сразу переходи к делу.")
+        elif client_greeted:
+            # Клиент поздоровался в середине разговора
+            context_parts.append("ВАЖНО: Клиент поздоровался. Ответь кратко на приветствие, затем продолжай общение.")
+        
         if context_parts:
             return user_input + "\n\n" + "\n".join(context_parts)
         return user_input
@@ -361,7 +372,7 @@ class ProductAgent(BaseAgent):
         agent_tools: List[Any],
         config: RunnableConfig,
     ) -> Dict[str, Any]:
-        """Выполняет агента с заданными сообщениями и инструментами.
+        """Выполняет агента с заданными сообщениями и инструментами с retry.
 
         Args:
             messages: Список сообщений для агента
@@ -372,19 +383,72 @@ class ProductAgent(BaseAgent):
             Результат выполнения агента
 
         Raises:
-            Exception: Если произошла ошибка при выполнении агента
+            Exception: Если произошла ошибка при выполнении агента после всех попыток
         """
+        from src.utils.retry_utils import retry_async
+        
         agent = self._get_agent(tools=agent_tools)
-
-        if MAX_AGENT_EXECUTION_TIME > 0:
-            result = await asyncio.wait_for(
-                agent.ainvoke({"messages": messages}, config=config),
-                timeout=MAX_AGENT_EXECUTION_TIME,
+        
+        async def _invoke_agent():
+            if MAX_AGENT_EXECUTION_TIME > 0:
+                return await asyncio.wait_for(
+                    agent.ainvoke({"messages": messages}, config=config),
+                    timeout=MAX_AGENT_EXECUTION_TIME,
+                )
+            else:
+                return await agent.ainvoke({"messages": messages}, config=config)
+        
+        try:
+            result = await retry_async(
+                _invoke_agent,
+                max_attempts=3,
+                delay=1.0,
+                backoff=2.0,
+                exceptions=(asyncio.TimeoutError, Exception),
+                on_retry=lambda attempt, e: logger.warning(
+                    f"[ProductAgent._execute_agent] Попытка {attempt} не удалась: {e}"
+                ),
             )
-        else:
-            result = await agent.ainvoke({"messages": messages}, config=config)
+            return result
+        except asyncio.TimeoutError as e:
+            from src.utils.exceptions import AgentTimeoutError
+            error_msg = f"Агент превысил максимальное время выполнения ({MAX_AGENT_EXECUTION_TIME} секунд)"
+            logger.error(f"[ProductAgent._execute_agent] Timeout агента: {error_msg}")
+            raise AgentTimeoutError(error_msg, {"timeout": MAX_AGENT_EXECUTION_TIME}) from e
+        except Exception as e:
+            from src.utils.exceptions import AgentExecutionError
+            error_msg = f"Ошибка при выполнении агента после всех попыток: {str(e)}"
+            logger.error(f"[ProductAgent._execute_agent] Ошибка агента: {error_msg}", exc_info=True)
+            raise AgentExecutionError(error_msg, {"original_error": str(e)}) from e
 
-        return result
+    def _postprocess_response(self, response: str) -> str:
+        """Постобработка ответа агента.
+        
+        - Удаляет артефакты инструментов
+        - Очищает лишние пробелы
+        - Удаляет служебные метки
+        
+        Args:
+            response: Исходный ответ агента
+        
+        Returns:
+            Обработанный ответ
+        """
+        if not response:
+            return response
+        
+        import re
+        # Удаляем [PRODUCT_IDS] секции
+        response = re.sub(r'\[PRODUCT_IDS\].*?\[/PRODUCT_IDS\]', '', response, flags=re.DOTALL)
+        
+        # Удаляем лишние пробелы и переносы строк
+        response = re.sub(r'\n{3,}', '\n\n', response)
+        response = re.sub(r' {2,}', ' ', response)
+        
+        # Удаляем служебные метки типа "✅ УСПЕШНО ОТПРАВЛЕНО" из ответа (они для агента, не для клиента)
+        # Но оставляем эмодзи и важную информацию
+        
+        return response.strip()
 
     def _extract_response(self, result: Dict[str, Any]) -> str:
         """Извлекает ответ агента из результата выполнения.
@@ -415,9 +479,15 @@ class ProductAgent(BaseAgent):
                     response_text = str(content) if content else ""
                 break
 
+        # Fallback на output
         if not response_text:
             response_text = result.get("output", "")
-        if not response_text:
+        
+        # Постобработка ответа
+        response_text = self._postprocess_response(response_text)
+        
+        # Валидация
+        if not response_text or len(response_text.strip()) < 3:
             response_text = "Упс, что-то пошло не так 😅. Попробуйте переформулировать запрос, и я обязательно помогу!"
 
         return response_text
@@ -496,25 +566,28 @@ class ProductAgent(BaseAgent):
                 PROMPT_TOPIC_VECTOR_SEARCH_INSTRUCTIONS,
             )
 
-            tool_prompts = []
-            prompt_topics = [
+            # Загружаем все инструкции из БД
+            instruction_topics = [
+                "Init Conversation Instructions",
+                "Tool Usage Instructions",
+                "Greeting Handling Instructions",
+                "Price Calculation Instructions",
+                "Response Formatting Instructions",
                 PROMPT_TOPIC_SQL_GENERATION_RULES,
                 PROMPT_TOPIC_VECTOR_SEARCH_INSTRUCTIONS,
                 PROMPT_TOPIC_PHOTO_SENDING_INSTRUCTIONS,
                 PROMPT_TOPIC_TOOL_USAGE_GUIDELINES,
             ]
             
-            for prompt_topic in prompt_topics:
-                tool_prompt = await get_prompt(prompt_topic)
-                if tool_prompt:
-                    tool_prompts.append(tool_prompt)
-
-            if tool_prompts:
-                tools_section = "\n\n".join([f"--- {topic} ---\n{p}" for topic, p in zip(
-                    prompt_topics,
-                    tool_prompts
-                ) if p])
-                base_prompt = f"{base_prompt}\n\n{tools_section}"
+            instructions = []
+            for instruction_topic in instruction_topics:
+                instruction = await get_prompt(instruction_topic)
+                if instruction:
+                    instructions.append(f"--- {instruction_topic} ---\n{instruction}")
+            
+            if instructions:
+                instructions_text = "\n\n".join(instructions)
+                base_prompt = f"{base_prompt}\n\n{instructions_text}"
 
             final_prompt = build_prompt_with_context(
                 base_prompt=base_prompt,
@@ -534,7 +607,7 @@ class ProductAgent(BaseAgent):
             
             context_tools = [set_photo_requirement, get_conversation_context]
             sql_tools = create_sql_tools()
-            media_tools = [show_product_photos]
+            media_tools = [show_product_photos, send_pricelist]
             
             agent_tools = self.tools + sql_tools + media_tools + context_tools
 

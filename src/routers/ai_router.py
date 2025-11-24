@@ -41,6 +41,13 @@ from src.utils.memory import SupabaseConversationMemory
 from src.utils.memory_utils import is_memory_initialized
 from src.utils.phone_validator import normalize_phone
 from src.utils.prompts import get_prompt, get_system_value
+from src.utils.validation_utils import validate_and_normalize_phone
+from src.routers.ai_router_helpers import (
+    prepare_user_input_for_agent,
+    send_pricelist_if_needed,
+    send_agent_response,
+    send_error_message,
+)
 from src.utils.queue import send_delayed_message
 
 logger = logging.getLogger(__name__)
@@ -61,10 +68,10 @@ async def process_conversation_background(request: UserMessageRequest):
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
 
-        user_input_with_tool_signature = (
-            f"{request.message}\n\n"
-            "ВАЖНО: Для ответа на этот запрос ОБЯЗАТЕЛЬНО используй доступные инструменты. "
-            "Не отвечай без вызова инструментов."
+        user_input_with_tool_signature = await prepare_user_input_for_agent(
+            request.message,
+            is_init=False,
+            topic=request.topic
         )
 
         response_text = await agent.run(
@@ -96,13 +103,7 @@ async def process_conversation_background(request: UserMessageRequest):
             f"[processConversation] Ошибка обработки для {request.client_phone}: {e}",
             exc_info=True,
         )
-        try:
-            await send_message(
-                request.client_phone,
-                ERROR_MESSAGE_WHATSAPP_FAILED,
-            )
-        except Exception:
-            pass
+        send_error_message(request.client_phone, "processConversation")
 
         return {"success": False}
 
@@ -201,55 +202,33 @@ async def init_conversation_background(request: InitConverastionRequest):
         else:
             welcome_input = welcome_input.replace("{client_phone}", request.client_phone)
 
+        # Подготавливаем ввод с инструкциями из БД
+        prepared_input = await prepare_user_input_for_agent(
+            welcome_input,
+            is_init=True,
+            topic=request.topic
+        )
+
         response_text = await agent.run(
-            user_input=welcome_input,
+            user_input=prepared_input,
             client_phone=request.client_phone,
             topic=request.topic,
             endpoint_name="initConversation",
         )
 
-        try:
-            await send_message(
-                request.client_phone,
-                remove_markdown_symbols(response_text),
-            )
-        except Exception as send_error:
-            logger.error(
-                f"[initConversation] Ошибка отправки сообщения в WhatsApp для {request.client_phone}: {send_error}",
-                exc_info=True,
-            )
-            raise
+        # Отправка сообщения
+        message_sent = await send_agent_response(
+            request.client_phone,
+            response_text,
+            "initConversation"
+        )
+        
+        if not message_sent:
+            raise Exception("Не удалось отправить сообщение клиенту")
 
-        try:
-            pricelist_url = await get_system_value(SYSTEM_VALUE_PRICELIST)
-            if pricelist_url:
-                parsed_url = urlparse(pricelist_url)
-                file_path = parsed_url.path
-                _, file_extension = os.path.splitext(file_path)
-                
-                if file_extension:
-                    file_extension = file_extension.lstrip('.')
-                else:
-                    file_extension = "xlsx"
-                
-                file_extension = file_extension.lower()
-                
-                send_file_success = await send_image(
-                    recipient=request.client_phone,
-                    file_url=pricelist_url,
-                    caption=SYSTEM_VALUE_PRICELIST,
-                    extension=file_extension,
-                )
-                
-                if not send_file_success:
-                    logger.warning(
-                        f"[initConversation] Не удалось отправить прайс-лист для {request.client_phone}"
-                    )
-        except Exception as pricelist_error:
-            logger.error(
-                f"[initConversation] Ошибка при отправке прайс-листа для {request.client_phone}: {pricelist_error}",
-                exc_info=True,
-            )
+        # Отправка прайс-листа (только если сообщение отправлено успешно)
+        if message_sent:
+            await send_pricelist_if_needed(request.client_phone)
 
         return {"success": True}
 
@@ -258,15 +237,7 @@ async def init_conversation_background(request: InitConverastionRequest):
             f"[initConversation] Критическая ошибка для {request.client_phone}: {e}",
             exc_info=True,
         )
-        try:
-            await send_message(
-                request.client_phone,
-                ERROR_MESSAGE_WHATSAPP_FAILED,
-            )
-        except Exception as send_error:
-            logger.error(
-                f"[initConversation] Ошибка отправки сообщения об ошибке: {send_error}"
-            )
+        send_error_message(request.client_phone, "initConversation")
 
         return {"success": False}
 

@@ -42,6 +42,18 @@ class AgentError(MyasoBaseException):
     pass
 
 
+class AgentTimeoutError(AgentError):
+    """Ошибка при таймауте агента."""
+
+    pass
+
+
+class AgentExecutionError(AgentError):
+    """Ошибка при выполнении агента."""
+
+    pass
+
+
 class WhatsAppError(MyasoBaseException):
     """Ошибка при работе с WhatsApp API."""
 

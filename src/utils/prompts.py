@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any, Dict, Optional
 
 from src.config.database_constants import (
@@ -17,16 +18,31 @@ from src.utils import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
+# Кэш для промптов (topic -> (prompt, timestamp))
+_PROMPT_CACHE: Dict[str, tuple[str, float]] = {}
+_PROMPT_CACHE_TTL = 600  # 10 минут в секундах
 
-async def get_prompt(topic: str) -> Optional[str]:
-    """Получает промпт из таблицы myaso.prompts по topic.
+
+async def get_prompt(topic: str, use_cache: bool = True) -> Optional[str]:
+    """Получает промпт из таблицы myaso.prompts по topic с кэшированием.
 
     Args:
         topic: Значение колонки topic из таблицы prompts (например, "Продать", "Узнать потребность")
+        use_cache: Использовать ли кэш (по умолчанию True)
 
     Returns:
         Текст промпта из колонки prompt или None, если промпт не найден
     """
+    current_time = time.time()
+    
+    # Проверяем кэш
+    if use_cache and topic in _PROMPT_CACHE:
+        cached_prompt, cache_time = _PROMPT_CACHE[topic]
+        if current_time - cache_time < _PROMPT_CACHE_TTL:
+            return cached_prompt
+        # Кэш устарел, удаляем
+        del _PROMPT_CACHE[topic]
+    
     try:
         supabase = await get_supabase_client()
 
@@ -39,7 +55,11 @@ async def get_prompt(topic: str) -> Optional[str]:
 
         if result.data and len(result.data) > 0:
             row = result.data[0]
-            return row.get(COLUMN_PROMPT)
+            prompt = row.get(COLUMN_PROMPT)
+            # Сохраняем в кэш
+            if prompt:
+                _PROMPT_CACHE[topic] = (prompt, current_time)
+            return prompt
 
         return None
     except Exception as e:
