@@ -38,7 +38,7 @@ from src.utils.prompts import (
 )
 
 from .base_agent import BaseAgent
-from .tools.client_tools import get_client_profile
+from .tools.client_tools import get_client_profile, get_client_orders, get_last_order
 from .tools.context_tools import (
     get_conversation_context,
     save_product_ids_to_context,
@@ -46,7 +46,15 @@ from .tools.context_tools import (
 )
 from .tools.media_tools import show_product_photos, send_pricelist
 from .tools.price_tools import calculate_product_price
-from .tools.product_tools import get_random_products, vector_search
+from .tools.product_tools import (
+    get_random_products,
+    vector_search,
+    get_product_by_title,
+    find_similar_products,
+    compare_products,
+    get_products_statistics,
+    get_recommendations_based_on_orders,
+)
 from .tools.sql_tools import create_sql_tools
 from .tools.context_vars import client_phone_context
 
@@ -113,7 +121,14 @@ class ProductAgent(BaseAgent):
         if tools is None:
             tools = [
                 get_client_profile,
+                get_client_orders,
+                get_last_order,
                 vector_search,
+                get_product_by_title,
+                find_similar_products,
+                compare_products,
+                get_products_statistics,
+                get_recommendations_based_on_orders,
                 get_random_products,
                 calculate_product_price,
             ]
