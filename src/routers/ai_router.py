@@ -7,6 +7,22 @@ from fastapi import APIRouter, BackgroundTasks
 from supabase import AClient
 
 from src.agents.factory import AgentFactory
+from src.config.database_constants import (
+    COLUMN_CLIENT_PHONE,
+    COLUMN_CREATED_AT,
+    COLUMN_DESTINATION,
+    COLUMN_PRICE_OUT,
+    COLUMN_TITLE,
+    COLUMN_WEIGHT_KG,
+    TABLE_CONVERSATION_HISTORY,
+    TABLE_ORDERS,
+)
+from src.config.messages_constants import (
+    ERROR_MESSAGE_INVALID_PHONE,
+    ERROR_MESSAGE_WHATSAPP_FAILED,
+    PROMPT_TOPIC_WELCOME_MESSAGE,
+    SYSTEM_VALUE_PRICELIST,
+)
 from src.config.settings import settings
 from src.database.queries.clients_queries import (
     get_client_by_phone,
@@ -22,7 +38,8 @@ from src.models import (
 from src.services.whatsapp_service import send_image, send_message
 from src.utils import get_supabase_client, remove_markdown_symbols
 from src.utils.memory import SupabaseConversationMemory
-from src.utils.phone_validator import normalize_phone, validate_phone
+from src.utils.memory_utils import is_memory_initialized
+from src.utils.phone_validator import normalize_phone
 from src.utils.prompts import get_prompt, get_system_value
 from src.utils.queue import send_delayed_message
 
@@ -44,7 +61,6 @@ async def process_conversation_background(request: UserMessageRequest):
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
 
-        # Добавляем подпись к user_input, чтобы агент обязательно вызывал инструменты
         user_input_with_tool_signature = (
             f"{request.message}\n\n"
             "ВАЖНО: Для ответа на этот запрос ОБЯЗАТЕЛЬНО используй доступные инструменты. "
@@ -83,7 +99,7 @@ async def process_conversation_background(request: UserMessageRequest):
         try:
             await send_message(
                 request.client_phone,
-                "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
+                ERROR_MESSAGE_WHATSAPP_FAILED,
             )
         except Exception:
             pass
@@ -104,12 +120,12 @@ async def process_conversation(
     Returns:
         Словарь с результатом успешного запуска задачи
     """
-    normalized_phone = normalize_phone(request.client_phone)
-    if not validate_phone(normalized_phone):
+    normalized_phone, validation_result = validate_and_normalize_phone(request.client_phone)
+    if not validation_result["success"]:
         logger.error(
             f"[processConversation] Невалидный номер телефона: {request.client_phone}"
         )
-        return {"success": False, "error": "Invalid phone number"}
+        return validation_result
 
     request.client_phone = normalized_phone
     
@@ -166,24 +182,20 @@ async def init_conversation_background(request: InitConverastionRequest):
     try:
         memory = await SupabaseConversationMemory(request.client_phone)
         
-        if not hasattr(memory, 'async_initialized') or not memory.async_initialized:
+        if not is_memory_initialized(memory):
             logger.warning(f"[initConversation] Память не инициализирована для {request.client_phone}, инициализируем...")
             await memory.__ainit__(request.client_phone)
     
         await memory.clear()
-        # Не логируем очистку памяти - это не важно
 
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
 
-        # Загружаем промпт из БД по topic "Вступительное сообщение" для init_conversation
-        # request.topic используется для других целей (например, в agent.run для загрузки системного промпта)
-        prompt_topic = "Вступительное сообщение"
-        welcome_input = await get_prompt(prompt_topic)
+        welcome_input = await get_prompt(PROMPT_TOPIC_WELCOME_MESSAGE)
         
         if not welcome_input:
             logger.warning(
-                f"[initConversation] Промпт для topic '{prompt_topic}' не найден в БД для {request.client_phone}"
+                f"[initConversation] Промпт для topic '{PROMPT_TOPIC_WELCOME_MESSAGE}' не найден в БД для {request.client_phone}"
             )
             welcome_input = ""
         else:
@@ -208,9 +220,8 @@ async def init_conversation_background(request: InitConverastionRequest):
             )
             raise
 
-        # Отправка прайс-листа после текста и фото
         try:
-            pricelist_url = await get_system_value("Прайс-лист")
+            pricelist_url = await get_system_value(SYSTEM_VALUE_PRICELIST)
             if pricelist_url:
                 parsed_url = urlparse(pricelist_url)
                 file_path = parsed_url.path
@@ -226,7 +237,7 @@ async def init_conversation_background(request: InitConverastionRequest):
                 send_file_success = await send_image(
                     recipient=request.client_phone,
                     file_url=pricelist_url,
-                    caption="Прайс-лист",
+                    caption=SYSTEM_VALUE_PRICELIST,
                     extension=file_extension,
                 )
                 
@@ -234,14 +245,11 @@ async def init_conversation_background(request: InitConverastionRequest):
                     logger.warning(
                         f"[initConversation] Не удалось отправить прайс-лист для {request.client_phone}"
                     )
-                # Не логируем успешную отправку - это не важно
-            # Не логируем отсутствие прайс-листа - это не важно
         except Exception as pricelist_error:
             logger.error(
                 f"[initConversation] Ошибка при отправке прайс-листа для {request.client_phone}: {pricelist_error}",
                 exc_info=True,
             )
-            # Не прерываем выполнение, так как основное сообщение уже отправлено
 
         return {"success": True}
 
@@ -253,7 +261,7 @@ async def init_conversation_background(request: InitConverastionRequest):
         try:
             await send_message(
                 request.client_phone,
-                "Что-то вотсап барахлит 😔. Напишите позже, пожалуйста!",
+                ERROR_MESSAGE_WHATSAPP_FAILED,
             )
         except Exception as send_error:
             logger.error(
@@ -276,12 +284,12 @@ async def init_conversation(
     Returns:
         Словарь с результатом успешного запуска задачи
     """
-    normalized_phone = normalize_phone(request.client_phone)
-    if not validate_phone(normalized_phone):
+    normalized_phone, validation_result = validate_and_normalize_phone(request.client_phone)
+    if not validation_result["success"]:
         logger.error(
             f"[initConversation] Невалидный номер телефона: {request.client_phone}"
         )
-        return {"success": False, "error": "Invalid phone number"}
+        return validation_result
 
     request.client_phone = normalized_phone
     background_tasks.add_task(init_conversation_background, request)
@@ -314,29 +322,29 @@ async def get_profile(client_phone: str):
         supabase = await get_supabase_client()
 
         history_resp = (
-            await supabase.table("conversation_history")
+            await supabase.table(TABLE_CONVERSATION_HISTORY)
             .select("*")
-            .eq("client_phone", client_phone)
+            .eq(COLUMN_CLIENT_PHONE, client_phone)
             .execute()
         )
         message_count = len(history_resp.data) if history_resp.data else 0
 
         orders_resp = (
-            await supabase.table("orders")
+            await supabase.table(TABLE_ORDERS)
             .select("*")
-            .eq("client_phone", client_phone)
-            .order("created_at", desc=True)
+            .eq(COLUMN_CLIENT_PHONE, client_phone)
+            .order(COLUMN_CREATED_AT, desc=True)
             .execute()
         )
         orders = orders_resp.data if orders_resp.data else []
         if orders:
             o = orders[0]
             last_order = {
-                "title": o.get("title"),
-                "created_at": o.get("created_at"),
-                "destination": o.get("destination"),
-                "price_out": o.get("price_out"),
-                "weight_kg": o.get("weight_kg"),
+                COLUMN_TITLE: o.get(COLUMN_TITLE),
+                COLUMN_CREATED_AT: o.get(COLUMN_CREATED_AT),
+                COLUMN_DESTINATION: o.get(COLUMN_DESTINATION),
+                COLUMN_PRICE_OUT: o.get(COLUMN_PRICE_OUT),
+                COLUMN_WEIGHT_KG: o.get(COLUMN_WEIGHT_KG),
             }
     except Exception:
         pass
@@ -385,13 +393,12 @@ async def reset_conversation(
     Returns:
         Словарь с результатом успешного запуска задачи
     """
-    normalized_phone = normalize_phone(request.client_phone)
-    if not validate_phone(normalized_phone):
+    normalized_phone, validation_result = validate_and_normalize_phone(request.client_phone)
+    if not validation_result["success"]:
         logger.error(
             f"[resetConversation] Невалидный номер телефона: {request.client_phone}"
         )
-        return {"success": False, "error": "Invalid phone number"}
-
+        return validation_result
 
     request.client_phone = normalized_phone
     background_tasks.add_task(reset_conversation_background, request)

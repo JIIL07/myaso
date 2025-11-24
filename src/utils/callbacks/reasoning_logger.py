@@ -38,7 +38,6 @@ class ReasoningLogger(BaseCallbackHandler):
         **kwargs: Any
     ) -> None:
         """Вызывается когда LLM начинает выполнение."""
-        # Не логируем здесь, чтобы избежать дублирования
         pass
 
     def on_llm_end(self, response: Any, **kwargs: Any) -> None:
@@ -132,9 +131,8 @@ class ReasoningLogger(BaseCallbackHandler):
                                         )
                                     reasoning_content = reasoning_text
                     except Exception:
-                        pass  # Не логируем ошибки извлечения
+                        pass
                 
-                # Проверяем usage_metadata для reasoning tokens
                 if hasattr(message_for_reasoning, "usage_metadata"):
                     try:
                         usage_metadata = message_for_reasoning.usage_metadata
@@ -155,13 +153,11 @@ class ReasoningLogger(BaseCallbackHandler):
                                     f"{reasoning_tokens} tokens"
                                 )
                     except Exception:
-                        pass  # Не логируем ошибки извлечения
+                        pass
                 
-                # Также проверяем response_metadata для reasoning tokens и content
                 if hasattr(message_for_reasoning, "response_metadata"):
                     response_metadata = message_for_reasoning.response_metadata or {}
                     
-                    # Token usage details с reasoning tokens
                     if "token_usage" in response_metadata:
                         token_usage = response_metadata.get("token_usage")
                         if token_usage and isinstance(token_usage, dict):
@@ -178,7 +174,6 @@ class ReasoningLogger(BaseCallbackHandler):
                                     f"{reasoning_tokens} tokens"
                                 )
                     
-                    # Прямой reasoning в metadata - логируем только если длинный
                     if "reasoning" in response_metadata and not reasoning_content:
                         reasoning_text = response_metadata.get("reasoning", "")
                         if reasoning_text and len(reasoning_text) > 1000:
@@ -188,7 +183,6 @@ class ReasoningLogger(BaseCallbackHandler):
                             )
                             reasoning_content = reasoning_text
             
-            # Извлекаем имена инструментов
             tool_names = []
             if tool_calls_info:
                 for tc in tool_calls_info:
@@ -202,7 +196,6 @@ class ReasoningLogger(BaseCallbackHandler):
                         tool_name = "unknown"
                     tool_names.append(tool_name)
             
-            # Логируем только если модель НЕ вызвала инструменты (важное предупреждение)
             if not tool_calls_info or not tool_names:
                 logger.warning(
                     f"[ReasoningLogger] ⚠️ LLM НЕ вызвал инструменты для {self.client_phone}"
@@ -243,7 +236,6 @@ class ReasoningLogger(BaseCallbackHandler):
         try:
             tool_name = serialized.get("name", "unknown")
             run_id = kwargs.get("run_id", "unknown")
-            # Не логируем каждый вызов инструмента - это избыточно
             self._tool_calls.append({
                 "run_id": run_id,
                 "tool_name": tool_name,
@@ -251,23 +243,21 @@ class ReasoningLogger(BaseCallbackHandler):
                 "status": "started",
             })
         except Exception:
-            pass  # Не логируем ошибки
+            pass
 
     def on_tool_end(self, output: str, **kwargs: Any) -> None:
         """Вызывается когда инструмент завершает выполнение."""
         try:
             tool_name = kwargs.get("name", "unknown")
             run_id = kwargs.get("run_id", "unknown")
-            # Не логируем каждый завершенный инструмент - это избыточно
             
-            # Обновляем информацию о вызове инструмента
             for tool_call in self._tool_calls:
                 if tool_call.get("run_id") == run_id:
                     tool_call["status"] = "completed"
                     tool_call["output"] = output[:500] if output else ""
                     break
         except Exception:
-            pass  # Не логируем ошибки
+            pass
 
     def on_tool_error(self, error: Exception, **kwargs: Any) -> None:
         """Вызывается когда инструмент встречает ошибку."""
@@ -288,12 +278,10 @@ class ReasoningLogger(BaseCallbackHandler):
         **kwargs: Any
     ) -> None:
         """Вызывается когда chain начинает выполнение."""
-        # Не логируем здесь, чтобы избежать дублирования
         pass
 
     def on_chain_end(self, outputs: Dict[str, Any], **kwargs: Any) -> None:
         """Вызывается когда chain завершает выполнение."""
-        # Не логируем здесь, чтобы избежать дублирования с ProductAgent.run
         pass
 
     def get_summary(self) -> Dict[str, Any]:

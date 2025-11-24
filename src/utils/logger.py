@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from datetime import datetime
+from typing import Any
 
 from pythonjsonlogger import jsonlogger
 
@@ -154,3 +155,64 @@ def setup_logging():
     logging.getLogger("openai").setLevel(logging.WARNING)
 
     _logging_setup_done = True
+
+
+def log_agent_action(
+    action: str,
+    client_phone: str | None = None,
+    **kwargs: Any,
+) -> None:
+    """Логирует действие агента.
+
+    Args:
+        action: Описание действия
+        client_phone: Номер телефона клиента (опционально)
+        **kwargs: Дополнительные поля для логирования
+    """
+    logger = logging.getLogger("agents.product_agent")
+    extra = {"action": action, **kwargs}
+    if client_phone:
+        extra["client_phone"] = client_phone
+    logger.info(f"[Agent] {action}", extra=extra)
+
+
+def log_tool_call(
+    tool_name: str,
+    client_phone: str | None = None,
+    **kwargs: Any,
+) -> None:
+    """Логирует вызов инструмента.
+
+    Args:
+        tool_name: Название инструмента
+        client_phone: Номер телефона клиента (опционально)
+        **kwargs: Дополнительные поля для логирования
+    """
+    logger = logging.getLogger("agents.tools")
+    extra = {"tool_name": tool_name, **kwargs}
+    if client_phone:
+        extra["client_phone"] = client_phone
+    logger.info(f"[Tool] {tool_name}", extra=extra)
+
+
+def log_database_operation(
+    operation: str,
+    table: str | None = None,
+    client_phone: str | None = None,
+    **kwargs: Any,
+) -> None:
+    """Логирует операцию с базой данных.
+
+    Args:
+        operation: Описание операции
+        table: Название таблицы (опционально)
+        client_phone: Номер телефона клиента (опционально)
+        **kwargs: Дополнительные поля для логирования
+    """
+    logger = logging.getLogger("database")
+    extra = {"operation": operation, **kwargs}
+    if table:
+        extra["table"] = table
+    if client_phone:
+        extra["client_phone"] = client_phone
+    logger.info(f"[Database] {operation}", extra=extra)

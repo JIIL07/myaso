@@ -19,6 +19,13 @@ from langchain_core.messages import (
 )
 from supabase import AClient
 
+from src.config.database_constants import (
+    COLUMN_CLIENT_PHONE,
+    COLUMN_CREATED_AT,
+    COLUMN_MESSAGE,
+    COLUMN_ROLE,
+    TABLE_CONVERSATION_HISTORY,
+)
 from src.utils import AsyncMixin, get_supabase_client
 
 logger = logging.getLogger(__name__)
@@ -85,15 +92,15 @@ class SupabaseConversationMemory(AsyncMixin, BaseChatMessageHistory):
         for m in messages:
             rows.append(
                 {
-                    "client_phone": self.client_phone,
-                    "role": _to_role(m),
-                    "message": m.content,
+                    COLUMN_CLIENT_PHONE: self.client_phone,
+                    COLUMN_ROLE: _to_role(m),
+                    COLUMN_MESSAGE: m.content,
                 }
             )
 
         try:
             logger.info(f"[SupabaseConversationMemory.add_messages] Сохранение {len(rows)} сообщений для {self.client_phone}")
-            result = await self.supabase.table("conversation_history").insert(rows).execute()
+            result = await self.supabase.table(TABLE_CONVERSATION_HISTORY).insert(rows).execute()
             logger.info(f"[SupabaseConversationMemory.add_messages] Успешно сохранено {len(rows)} сообщений для {self.client_phone}")
         except Exception as e:
             logger.error(f"[SupabaseConversationMemory.add_messages] Ошибка при сохранении сообщений для {self.client_phone}: {e}", exc_info=True)
@@ -103,9 +110,9 @@ class SupabaseConversationMemory(AsyncMixin, BaseChatMessageHistory):
         """Удаляет историю для указанного `client_phone`."""
         assert self.supabase is not None, "Supabase client is not initialized"
         await (
-            self.supabase.table("conversation_history")
+            self.supabase.table(TABLE_CONVERSATION_HISTORY)
             .delete()
-            .eq("client_phone", self.client_phone)
+            .eq(COLUMN_CLIENT_PHONE, self.client_phone)
             .execute()
         )
 
@@ -113,14 +120,14 @@ class SupabaseConversationMemory(AsyncMixin, BaseChatMessageHistory):
         """Возвращает сообщения в формате LangChain (по возрастанию времени)."""
         assert self.supabase is not None, "Supabase client is not initialized"
         resp = (
-            await self.supabase.table("conversation_history")
+            await self.supabase.table(TABLE_CONVERSATION_HISTORY)
             .select("*")
-            .eq("client_phone", self.client_phone)
-            .order("created_at", desc=False)
+            .eq(COLUMN_CLIENT_PHONE, self.client_phone)
+            .order(COLUMN_CREATED_AT, desc=False)
             .execute()
         )
         data: Iterable[Dict[str, Any]] = getattr(resp, "data", [])
-        return [_from_role(r.get("role", "user"), r.get("message", "")) for r in data]
+        return [_from_role(r.get(COLUMN_ROLE, "user"), r.get(COLUMN_MESSAGE, "")) for r in data]
 
     async def load_memory_variables(
         self, inputs: Dict[str, Any] | None = None, *, return_messages: bool = True

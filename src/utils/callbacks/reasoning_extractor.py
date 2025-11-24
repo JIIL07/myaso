@@ -33,12 +33,10 @@ class ReasoningExtractor:
             "has_reasoning": False,
         }
 
-        # Находим AIMessage в ответе
         message = ReasoningExtractor._find_message_in_response(response)
         if not message:
             return result
 
-        # Извлекаем из content_blocks
         reasoning_text, thinking_text = ReasoningExtractor._extract_from_content_blocks(message)
         if reasoning_text:
             result["reasoning_text"] = reasoning_text
@@ -47,7 +45,6 @@ class ReasoningExtractor:
             result["thinking_text"] = thinking_text
             result["has_reasoning"] = True
 
-        # Извлекаем reasoning tokens из usage_metadata
         if hasattr(message, "usage_metadata"):
             reasoning_tokens = ReasoningExtractor._extract_from_usage_metadata(message.usage_metadata)
             if reasoning_tokens:
@@ -55,13 +52,11 @@ class ReasoningExtractor:
                 if reasoning_tokens > 0:
                     result["has_reasoning"] = True
 
-        # Извлекаем reasoning tokens из response_metadata.token_usage
         if hasattr(message, "response_metadata"):
             response_metadata = message.response_metadata or {}
             if isinstance(response_metadata, dict) and "token_usage" in response_metadata:
                 token_usage = response_metadata.get("token_usage")
                 if token_usage and isinstance(token_usage, dict):
-                    # Проверяем reasoning_tokens в разных местах token_usage
                     reasoning_tokens_from_metadata = (
                         token_usage.get("reasoning_tokens") or
                         (token_usage.get("completion_tokens_details", {}).get("reasoning_tokens") if isinstance(token_usage.get("completion_tokens_details"), dict) else None) or
@@ -72,7 +67,6 @@ class ReasoningExtractor:
                         if reasoning_tokens_from_metadata > 0:
                             result["has_reasoning"] = True
 
-            # Извлекаем reasoning текст из response_metadata
             metadata_reasoning = ReasoningExtractor._extract_from_response_metadata(response_metadata)
             if metadata_reasoning and not result["reasoning_text"]:
                 result["reasoning_text"] = metadata_reasoning
@@ -90,7 +84,6 @@ class ReasoningExtractor:
         Returns:
             AIMessage если найден, иначе None
         """
-        # Формат 1: response.generations[0][0].message (стандартный LangChain)
         if hasattr(response, "generations") and response.generations:
             for generation_list in response.generations:
                 for generation in generation_list:
@@ -99,7 +92,6 @@ class ReasoningExtractor:
                         if isinstance(message, AIMessage):
                             return message
 
-        # Формат 2: response.message (прямой доступ)
         if hasattr(response, "message"):
             message = response.message
             if isinstance(message, AIMessage):
@@ -133,7 +125,6 @@ class ReasoningExtractor:
                 block_reasoning = None
                 block_thinking = None
 
-                # Проверяем разные форматы блоков
                 if isinstance(block, dict):
                     block_type = block.get("type")
                     block_reasoning = block.get("reasoning")
@@ -145,14 +136,12 @@ class ReasoningExtractor:
                     if hasattr(block, "thinking"):
                         block_thinking = getattr(block, "thinking", None)
 
-                # Извлекаем reasoning
                 if block_type == "reasoning" and block_reasoning:
                     if reasoning_text:
                         reasoning_text += "\n\n" + str(block_reasoning)
                     else:
                         reasoning_text = str(block_reasoning)
 
-                # Извлекаем thinking
                 if block_type == "thinking" and block_thinking:
                     if thinking_text:
                         thinking_text += "\n\n" + str(block_thinking)
@@ -160,7 +149,7 @@ class ReasoningExtractor:
                         thinking_text = str(block_thinking)
 
         except Exception:
-            pass  # Не логируем ошибки извлечения
+            pass
 
         return reasoning_text, thinking_text
 
@@ -205,13 +194,11 @@ class ReasoningExtractor:
             return None
 
         try:
-            # Прямое поле reasoning
             if "reasoning" in metadata:
                 reasoning = metadata.get("reasoning")
                 if reasoning:
                     return str(reasoning)
 
-            # Поле thinking
             if "thinking" in metadata:
                 thinking = metadata.get("thinking")
                 if thinking:

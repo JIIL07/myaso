@@ -2,6 +2,11 @@
 
 from typing import Any, Dict, List, Optional
 
+from src.config.database_constants import (
+    COLUMN_CLIENT_PHONE,
+    COLUMN_CREATED_AT,
+    TABLE_ORDERS,
+)
 from src.utils import get_supabase_client
 
 
@@ -17,10 +22,10 @@ async def get_client_orders(phone: str) -> List[Dict[str, Any]]:
     try:
         supabase = await get_supabase_client()
         result = (
-            await supabase.table("orders")
+            await supabase.table(TABLE_ORDERS)
             .select("*")
-            .eq("client_phone", phone)
-            .order("created_at", desc=True)
+            .eq(COLUMN_CLIENT_PHONE, phone)
+            .order(COLUMN_CREATED_AT, desc=True)
             .execute()
         )
         return result.data if result.data else []

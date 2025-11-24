@@ -2,6 +2,10 @@
 
 from typing import Any, Dict, List
 
+from src.config.database_constants import (
+    COLUMN_CLIENT_PHONE,
+    TABLE_CONVERSATION_HISTORY,
+)
 from src.utils import get_supabase_client
 
 
@@ -17,9 +21,9 @@ async def get_conversation_history_count(phone: str) -> int:
     try:
         supabase = await get_supabase_client()
         result = (
-            await supabase.table("conversation_history")
+            await supabase.table(TABLE_CONVERSATION_HISTORY)
             .select("*")
-            .eq("client_phone", phone)
+            .eq(COLUMN_CLIENT_PHONE, phone)
             .execute()
         )
         return len(result.data) if result.data else 0
@@ -36,9 +40,9 @@ async def clear_conversation_history(phone: str) -> None:
     try:
         supabase = await get_supabase_client()
         await (
-            supabase.table("conversation_history")
+            supabase.table(TABLE_CONVERSATION_HISTORY)
             .delete()
-            .eq("client_phone", phone)
+            .eq(COLUMN_CLIENT_PHONE, phone)
             .execute()
         )
     except Exception as e:

@@ -7,6 +7,11 @@ from typing import List, Tuple
 
 from langchain_core.tools import tool
 
+from src.config.messages_constants import (
+    ERROR_MESSAGE_DATABASE_NOT_CONFIGURED,
+    ERROR_MESSAGE_PRODUCTS_NOT_FOUND,
+    ERROR_MESSAGE_PRODUCTS_WITH_PHOTOS_NOT_FOUND,
+)
 from src.database.queries.products_queries import (
     get_random_products as get_random_products_db,
 )
@@ -54,10 +59,10 @@ async def vector_search(query: str, k: int = 10, require_photo: bool = False) ->
         # Получаем больше товаров для фильтрации по фото если требуется
     except Exception as e:
         logger.error(f"Ошибка при поиске по запросу '{query}': {e}", exc_info=True)
-        return "Товары по вашему запросу не найдены.", []
+        return ERROR_MESSAGE_PRODUCTS_NOT_FOUND, []
 
     if not documents:
-        return "Товары по вашему запросу не найдены.", []
+        return ERROR_MESSAGE_PRODUCTS_NOT_FOUND, []
 
     # Фильтрация по наличию фото ДО обработки результатов (если требуется)
     if require_photo:
@@ -66,7 +71,7 @@ async def vector_search(query: str, k: int = 10, require_photo: bool = False) ->
             if doc.metadata.get('photo')
         ]
         if not documents:
-            return "Товары с фотографиями по вашему запросу не найдены.", []
+            return ERROR_MESSAGE_PRODUCTS_WITH_PHOTOS_NOT_FOUND, []
 
     documents = documents[:k]
     products = []
@@ -119,7 +124,7 @@ async def get_random_products(limit: int = 10) -> Tuple[str, List[int]]:
 
     except RuntimeError as e:
         logger.error(f"Ошибка подключения к базе данных: {e}")
-        return "Не настроено подключение к базе данных.", []
+        return ERROR_MESSAGE_DATABASE_NOT_CONFIGURED, []
     except Exception as e:
         logger.error(f"Ошибка при получении случайных товаров: {e}")
         return f"Ошибка при получении товаров: {str(e)}", []

@@ -15,6 +15,7 @@ from src.config.constants import (
     DEFAULT_SQL_LIMIT,
     TEXT_TO_SQL_TEMPERATURE,
 )
+from src.config.messages_constants import PROMPT_TOPIC_SQL_GENERATION_RULES
 from src.config.settings import settings
 from src.database import get_pool
 from src.database.queries.products_queries import get_products_by_sql_conditions
@@ -114,9 +115,9 @@ async def _generate_sql_from_text_impl(
     if topic:
         db_prompt = await get_prompt(topic)
 
-    sql_rules_prompt = await get_prompt("SQL Generation Rules")
+    sql_rules_prompt = await get_prompt(PROMPT_TOPIC_SQL_GENERATION_RULES)
     if not sql_rules_prompt:
-        logger.warning("[sql_tools] Промпт 'SQL Generation Rules' не найден в БД, используем базовые правила")
+        logger.warning(f"[sql_tools] Промпт '{PROMPT_TOPIC_SQL_GENERATION_RULES}' не найден в БД, используем базовые правила")
 
     try:
         schema_context = await get_products_table_schema()
@@ -155,19 +156,16 @@ async def _generate_sql_from_text_impl(
 
     sql_query = result.content.strip()
 
-    # Убираем markdown code blocks если есть
     if sql_query.startswith("```"):
         lines = sql_query.split("\n")
         sql_query = "\n".join([line for line in lines if not line.strip().startswith("```")]).strip()
 
-    # Убираем WHERE в начале если это WHERE условия
     while sql_query.upper().strip().startswith("WHERE"):
         sql_query = sql_query[5:].strip()
 
     if not sql_query:
         raise ValueError("LLM вернул пустой SQL запрос")
 
-    # Проверка на опасные команды
     sql_upper = sql_query.upper()
     for keyword in DANGEROUS_SQL_KEYWORDS:
         if re.search(rf"\b{re.escape(keyword)}\b", sql_upper):
@@ -178,10 +176,8 @@ async def _generate_sql_from_text_impl(
             )
             raise ValueError(f"Обнаружена опасная SQL команда: {keyword}")
 
-    # Заменяем LIKE на ILIKE для регистронезависимого поиска
     sql_query = _replace_like_with_ilike(sql_query)
 
-    # Валидация только для WHERE условий (не для полных SELECT)
     if not sql_query.upper().strip().startswith("SELECT"):
         validate_sql_conditions(sql_query)
 
@@ -199,19 +195,11 @@ def _replace_like_with_ilike(sql_query: str) -> str:
     Returns:
         SQL запрос с замененными LIKE на ILIKE
     """
-    # Список текстовых полей, для которых нужно использовать ILIKE вместо =
     text_fields = ["supplier_name", "title", "from_region"]
     
-    # Заменяем LIKE на ILIKE (регистронезависимо)
-    # Используем регулярное выражение для замены только ключевого слова LIKE, не затрагивая ILIKE
     sql_query = re.sub(r'\bLIKE\b', 'ILIKE', sql_query, flags=re.IGNORECASE)
     
-    # Заменяем = на ILIKE для текстовых полей
-    # Паттерн: поле = 'значение' или поле = "значение" -> поле ILIKE 'значение'
     for field in text_fields:
-        # Заменяем field = 'value' на field ILIKE 'value'
-        # Учитываем возможные пробелы и одинарные/двойные кавычки
-        # Паттерн ищет: поле = 'значение' или поле = "значение"
         pattern = rf'\b{re.escape(field)}\s*=\s*([\'"])([^\1]+)\1'
         replacement = rf'{field} ILIKE \1\2\1'
         sql_query = re.sub(pattern, replacement, sql_query, flags=re.IGNORECASE)

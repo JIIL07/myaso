@@ -1,5 +1,10 @@
 from typing import Any, Dict, Optional
 
+from src.config.database_constants import (
+    COLUMN_CLIENT_PHONE,
+    COLUMN_CONTEXT_DATA,
+    TABLE_AGENT_CONTEXT,
+)
 from src.utils import get_supabase_client
 
 
@@ -15,13 +20,13 @@ async def get_agent_context_from_db(client_phone: str) -> Dict[str, Any]:
     try:
         supabase = await get_supabase_client()
         result = (
-            await supabase.table("agent_context")
-            .select("context_data")
-            .eq("client_phone", client_phone)
+            await supabase.table(TABLE_AGENT_CONTEXT)
+            .select(COLUMN_CONTEXT_DATA)
+            .eq(COLUMN_CLIENT_PHONE, client_phone)
             .execute()
         )
         if result.data and len(result.data) > 0:
-            return result.data[0].get("context_data", {})
+            return result.data[0].get(COLUMN_CONTEXT_DATA, {})
         return {}
     except Exception as e:
         raise RuntimeError(f"Ошибка при получении контекста агента: {e}") from e
@@ -39,13 +44,13 @@ async def save_agent_context_to_db(
     try:
         supabase = await get_supabase_client()
         await (
-            supabase.table("agent_context")
+            supabase.table(TABLE_AGENT_CONTEXT)
             .upsert(
                 {
-                    "client_phone": client_phone,
-                    "context_data": context_data,
+                    COLUMN_CLIENT_PHONE: client_phone,
+                    COLUMN_CONTEXT_DATA: context_data,
                 },
-                on_conflict="client_phone",
+                on_conflict=COLUMN_CLIENT_PHONE,
             )
             .execute()
         )
@@ -82,9 +87,9 @@ async def clear_agent_context_from_db(client_phone: str) -> None:
     try:
         supabase = await get_supabase_client()
         await (
-            supabase.table("agent_context")
+            supabase.table(TABLE_AGENT_CONTEXT)
             .delete()
-            .eq("client_phone", client_phone)
+            .eq(COLUMN_CLIENT_PHONE, client_phone)
             .execute()
         )
     except Exception as e:

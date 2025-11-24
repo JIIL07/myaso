@@ -13,8 +13,6 @@ TEXT_TO_SQL_TEMPERATURE = 0.1
 
 MAX_AGENT_ITERATIONS = 1000
 MAX_AGENT_EXECUTION_TIME = 3600
-# Лимит рекурсии для LangGraph (должен быть >= MAX_AGENT_ITERATIONS)
-# Устанавливаем немного больше, чтобы дать middleware возможность сработать
 AGENT_RECURSION_LIMIT = MAX_AGENT_ITERATIONS + 5 
 
 MAX_SQL_RETRY_ATTEMPTS = 3
@@ -26,8 +24,6 @@ HTTP_TIMEOUT_SECONDS = 10.0
 DB_CONNECTION_TIMEOUT = 10.0
 DB_COMMAND_TIMEOUT = 30.0
 
-# Опасные SQL операции, которые запрещены
-# Проверяется только наличие этих ключевых слов - все остальное разрешено
 DANGEROUS_SQL_KEYWORDS = [
     "DROP",
     "TRUNCATE",
@@ -35,14 +31,12 @@ DANGEROUS_SQL_KEYWORDS = [
     "INSERT",
     "EXECUTE",
     "EXEC",
-    # Также запрещаем UPDATE и ALTER для безопасности
     "UPDATE",
     "ALTER",
     "CREATE",
 ]
 
-# Константы для RAG контекста
-ENABLE_QUERY_REWRITING = False  # Включить query rewriting на основе истории
-ENABLE_RERANKING = False  # Включить reranking результатов поиска
-CONTEXT_CACHE_TTL_SECONDS = 300  # TTL для кэша контекста (5 минут)
-MAX_HISTORY_FOR_REWRITING = 10  # Максимальное количество сообщений из истории для rewriting
+ENABLE_QUERY_REWRITING = False
+ENABLE_RERANKING = False
+CONTEXT_CACHE_TTL_SECONDS = 300
+MAX_HISTORY_FOR_REWRITING = 10

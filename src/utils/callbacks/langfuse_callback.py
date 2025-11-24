@@ -112,11 +112,10 @@ class LangfuseHandler(BaseCallbackHandler):
         if not serialized or not isinstance(serialized, dict):
             return False
         name = serialized.get('name', '')
-        # Новый API использует разные имена, проверяем несколько вариантов
         return (
-            name == "AgentExecutor" or  # Старый API (для совместимости)
-            name == "Agent" or  # Новый API
-            'agent' in name.lower()  # Любые вариации с "agent"
+            name == "AgentExecutor" or
+            name == "Agent" or
+            'agent' in name.lower()
         )
 
     def _modify_chain_name(self, serialized: Dict[str, Any]) -> Dict[str, Any]:
@@ -175,10 +174,8 @@ class LangfuseHandler(BaseCallbackHandler):
             **kwargs: Дополнительные параметры (run_id, run_manager и т.д.)
         """
         try:
-            # Извлекаем reasoning из ответа ДО вызова стандартного handler
             reasoning_data = self._reasoning_extractor.extract_reasoning_from_response(response)
             
-            # Формируем metadata с reasoning для передачи в LangFuse
             reasoning_metadata = {}
             if reasoning_data.get("has_reasoning"):
                 if reasoning_data.get("reasoning_text"):
@@ -188,26 +185,21 @@ class LangfuseHandler(BaseCallbackHandler):
                 if reasoning_data.get("reasoning_tokens"):
                     reasoning_metadata["reasoning_tokens"] = reasoning_data["reasoning_tokens"]
 
-            # Объединяем reasoning metadata с существующими metadata из kwargs
             if reasoning_metadata and "metadata" in kwargs:
                 kwargs["metadata"] = {**kwargs.get("metadata", {}), **reasoning_metadata}
             elif reasoning_metadata:
                 kwargs["metadata"] = reasoning_metadata
 
-            # Вызываем стандартный handler с обновленными metadata
             if self._langfuse_handler:
                 try:
                     self._langfuse_handler.on_llm_end(response, **kwargs)
                 except Exception:
                     pass
 
-            # Дополнительно пытаемся обновить через прямой API, если reasoning найден
             if reasoning_data.get("has_reasoning"):
                 self._update_langfuse_generation_with_reasoning(reasoning_data, **kwargs)
 
         except Exception:
-            # Не прерываем выполнение при ошибках извлечения reasoning
-            # Все равно вызываем стандартный handler
             if self._langfuse_handler:
                 try:
                     self._langfuse_handler.on_llm_end(response, **kwargs)
@@ -233,7 +225,6 @@ class LangfuseHandler(BaseCallbackHandler):
             if not run_id:
                 return
 
-            # Формируем metadata с reasoning
             metadata = {}
             
             if reasoning_data.get("reasoning_text"):
@@ -248,15 +239,10 @@ class LangfuseHandler(BaseCallbackHandler):
             if not metadata:
                 return
 
-            # Пытаемся получить доступ к generation через LangFuse handler
-            # LangFuseCallbackHandler хранит generation в своем внутреннем состоянии
-            # Мы можем попытаться обновить его через прямой доступ к API
             try:
                 if self._langfuse_handler and hasattr(self._langfuse_handler, 'langfuse'):
                     langfuse_obj = getattr(self._langfuse_handler, 'langfuse')
                     if langfuse_obj and hasattr(langfuse_obj, 'generation'):
-                        # Пытаемся обновить последний generation
-                        # Это зависит от внутренней реализации LangFuse SDK
                         pass
             except Exception:
                 pass

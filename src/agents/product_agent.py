@@ -27,9 +27,11 @@ from src.config.constants import (
     MAX_AGENT_EXECUTION_TIME,
     MAX_AGENT_ITERATIONS,
 )
+from src.config.messages_constants import GREETING_WORDS
 from src.config.settings import settings
 from src.database.queries.clients_queries import get_client_is_friend
 from src.utils.callbacks.langfuse_callback import LangfuseHandler
+from src.utils.memory_utils import is_memory_initialized
 from src.utils.prompts import (
     build_prompt_with_context,
     get_all_system_values,
@@ -65,14 +67,7 @@ def is_greeting_message(message: str) -> bool:
     
     message_lower = message.lower().strip()
     
-    greetings = [
-        "привет", "здравствуй", "здравствуйте", "добрый день", "добрый вечер",
-        "доброе утро", "доброй ночи", "доброго дня", "доброго вечера",
-        "доброго утра", "здорово", "салют", "хай", "hi", "hello",
-        "доброго времени суток", "приветствую", "добро пожаловать"
-    ]
-    
-    for greeting in greetings:
+    for greeting in GREETING_WORDS:
         if message_lower.startswith(greeting) or f" {greeting} " in f" {message_lower} ":
             return True
     
@@ -129,7 +124,6 @@ class ProductAgent(BaseAgent):
                     openai_api_base=settings.openrouter.base_url,
                     temperature=DEFAULT_TEMPERATURE,
                 )
-                # Не логируем инициализацию LLM - это не важно
             except Exception as e:
                 logger.error(
                     f"[ProductAgent] Ошибка инициализации LLM: {e}",
@@ -138,7 +132,6 @@ class ProductAgent(BaseAgent):
                 raise ValueError(f"Не удалось инициализировать LLM: {e}") from e
 
         if tools is None:
-            # Базовые инструменты (все статические, используют contextvars для client_phone)
             tools = [
                 get_client_profile,
                 vector_search,
@@ -282,7 +275,7 @@ class ProductAgent(BaseAgent):
         chat_history: List[BaseMessage] = []
         if self.memory is not None:
             try:
-                if not hasattr(self.memory, 'async_initialized') or not self.memory.async_initialized:
+                if not is_memory_initialized(self.memory):
                     logger.warning(f"[ProductAgent] Память не инициализирована для {client_phone}, пропускаем загрузку истории")
                     chat_history = []
                 else:
@@ -320,8 +313,6 @@ class ProductAgent(BaseAgent):
         Returns:
             True если это первое сообщение (нет HumanMessage в истории), False иначе
         """
-        # Проверяем наличие HumanMessage в истории
-        # Если нет HumanMessage - это первое сообщение
         for msg in chat_history:
             if isinstance(msg, HumanMessage):
                 return False
@@ -450,11 +441,10 @@ class ProductAgent(BaseAgent):
             return
 
         try:
-            if not hasattr(self.memory, 'async_initialized') or not self.memory.async_initialized:
+            if not is_memory_initialized(self.memory):
                 logger.warning(f"[ProductAgent] Память не инициализирована для {client_phone}, пропускаем сохранение")
                 return
 
-            # Не сохраняем user_input если это первое сообщение
             is_first = self._is_first_message(chat_history)
             if not is_first:
                 await self.memory.add_messages([HumanMessage(content=user_input)])
@@ -499,22 +489,29 @@ class ProductAgent(BaseAgent):
                 topic, client_phone
             )
 
-            # Загружаем дополнительные промпты для инструментов
+            from src.config.messages_constants import (
+                PROMPT_TOPIC_PHOTO_SENDING_INSTRUCTIONS,
+                PROMPT_TOPIC_SQL_GENERATION_RULES,
+                PROMPT_TOPIC_TOOL_USAGE_GUIDELINES,
+                PROMPT_TOPIC_VECTOR_SEARCH_INSTRUCTIONS,
+            )
+
             tool_prompts = []
-            for prompt_topic in [
-                "SQL Generation Rules",
-                "Vector Search Instructions",
-                "Photo Sending Instructions",
-                "Tool Usage Guidelines",
-            ]:
+            prompt_topics = [
+                PROMPT_TOPIC_SQL_GENERATION_RULES,
+                PROMPT_TOPIC_VECTOR_SEARCH_INSTRUCTIONS,
+                PROMPT_TOPIC_PHOTO_SENDING_INSTRUCTIONS,
+                PROMPT_TOPIC_TOOL_USAGE_GUIDELINES,
+            ]
+            
+            for prompt_topic in prompt_topics:
                 tool_prompt = await get_prompt(prompt_topic)
                 if tool_prompt:
                     tool_prompts.append(tool_prompt)
 
-            # Объединяем все промпты
             if tool_prompts:
                 tools_section = "\n\n".join([f"--- {topic} ---\n{p}" for topic, p in zip(
-                    ["SQL Generation Rules", "Vector Search Instructions", "Photo Sending Instructions", "Tool Usage Guidelines"],
+                    prompt_topics,
                     tool_prompts
                 ) if p])
                 base_prompt = f"{base_prompt}\n\n{tools_section}"
@@ -528,23 +525,17 @@ class ProductAgent(BaseAgent):
 
             input_with_context = self._prepare_messages(user_input, chat_history)
 
-            # Загружаем контекст агента (будет загружен из БД или кэша)
-            # Контекст автоматически сохраняется через инструменты при изменениях
             from .tools.context_tools import get_agent_context_async
-            await get_agent_context_async(client_phone)  # Загружаем в кэш
+            await get_agent_context_async(client_phone)
             
-            # Определяем, является ли это первым сообщением
             is_first = self._is_first_message(chat_history)
             
-            # Устанавливаем client_phone в контекст для статических инструментов
             client_phone_context.set(client_phone)
             
-            # Статические инструменты (используют contextvars для получения client_phone)
             context_tools = [set_photo_requirement, get_conversation_context]
             sql_tools = create_sql_tools()
             media_tools = [show_product_photos]
             
-            # Все инструменты теперь статические
             agent_tools = self.tools + sql_tools + media_tools + context_tools
 
             callbacks_list = [
@@ -561,8 +552,6 @@ class ProductAgent(BaseAgent):
                 },
                 "run_name": trace_name,
                 "tags": ["product_agent", "conversation", trace_name],
-                # Устанавливаем лимит рекурсии для LangGraph
-                # Это предотвращает ошибку "Recursion limit reached"
                 "recursion_limit": AGENT_RECURSION_LIMIT,
             }
 
@@ -582,7 +571,6 @@ class ProductAgent(BaseAgent):
                 logger.error(f"[ProductAgent.run] Ошибка агента: {error_msg}", exc_info=True)
                 raise Exception(error_msg) from e
             finally:
-                # Очищаем контекст после выполнения
                 client_phone_context.set('')
 
             response_text = self._extract_response(result)
@@ -592,13 +580,9 @@ class ProductAgent(BaseAgent):
                 tool_messages = [msg for msg in messages_result if isinstance(msg, ToolMessage)]
                 steps_count = len(tool_messages) if tool_messages else 0
                 
-                # Обрабатываем artifacts из ToolMessage и сохраняем product_ids в context7
                 for tool_msg in tool_messages:
-                    # Проверяем наличие artifact в ToolMessage
                     if hasattr(tool_msg, 'artifact') and tool_msg.artifact is not None:
-                        # Проверяем, что это список ID товаров
                         if isinstance(tool_msg.artifact, list) and len(tool_msg.artifact) > 0:
-                            # Проверяем, что все элементы - числа
                             if all(isinstance(x, int) for x in tool_msg.artifact):
                                 try:
                                     await save_product_ids_to_context(client_phone, tool_msg.artifact)
@@ -633,7 +617,8 @@ class ProductAgent(BaseAgent):
             return response_text
 
         except Exception as e:
-            error_msg = "Ой, что-то пошло не так 😔. Попробуйте написать еще раз, пожалуйста!"
+            from src.config.messages_constants import ERROR_MESSAGE_AGENT_FAILED
+            error_msg = ERROR_MESSAGE_AGENT_FAILED
             logger.error(f"[ProductAgent.run] Ошибка ProductAgent: {str(e)}", exc_info=True)
 
             try:

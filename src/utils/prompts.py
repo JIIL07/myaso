@@ -6,6 +6,13 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
+from src.config.database_constants import (
+    COLUMN_PROMPT,
+    COLUMN_TOPIC,
+    COLUMN_VALUE,
+    TABLE_PROMPTS,
+    TABLE_SYSTEM,
+)
 from src.utils import get_supabase_client
 
 logger = logging.getLogger(__name__)
@@ -24,15 +31,15 @@ async def get_prompt(topic: str) -> Optional[str]:
         supabase = await get_supabase_client()
 
         result = (
-            await supabase.table("prompts")
-            .select("prompt")
-            .eq("topic", topic)
+            await supabase.table(TABLE_PROMPTS)
+            .select(COLUMN_PROMPT)
+            .eq(COLUMN_TOPIC, topic)
             .execute()
         )
 
         if result.data and len(result.data) > 0:
             row = result.data[0]
-            return row.get("prompt")
+            return row.get(COLUMN_PROMPT)
 
         return None
     except Exception as e:
@@ -53,11 +60,14 @@ async def get_system_value(topic: str) -> Optional[str]:
         supabase = await get_supabase_client()
 
         result = (
-            await supabase.table("system").select("value").eq("topic", topic).execute()
+            await supabase.table(TABLE_SYSTEM)
+            .select(COLUMN_VALUE)
+            .eq(COLUMN_TOPIC, topic)
+            .execute()
         )
 
         if result.data and len(result.data) > 0:
-            return result.data[0].get("value")
+            return result.data[0].get(COLUMN_VALUE)
 
         return None
     except Exception as e:
@@ -78,10 +88,10 @@ async def get_all_system_values() -> Dict[str, str]:
     try:
         supabase = await get_supabase_client()
 
-        result = await supabase.table("system").select("topic, value").execute()
+        result = await supabase.table(TABLE_SYSTEM).select(f"{COLUMN_TOPIC}, {COLUMN_VALUE}").execute()
 
         if result.data:
-            return {row.get("topic", ""): row.get("value", "") for row in result.data}
+            return {row.get(COLUMN_TOPIC, ""): row.get(COLUMN_VALUE, "") for row in result.data}
 
         return {}
     except Exception as e:
@@ -124,14 +134,11 @@ def escape_prompt_variables(prompt: str) -> str:
     Returns:
         Промпт с экранированными переменными
     """
-    # Известные переменные LangChain (для обратной совместимости)
-    # Примечание: create_agent API не использует шаблонные переменные напрямую,
-    # но эти переменные могут использоваться в старых версиях или других API
     known_variables = {
         "input",
         "chat_history",
         "agent_scratchpad",
-        "intermediate_steps",  # Не используется в текущей реализации, оставлено для совместимости
+        "intermediate_steps",
     }
 
     pattern = r"(?<!\{)\{([^}]+)\}(?!\})"
