@@ -78,3 +78,21 @@ async def get_client_is_friend(phone: str) -> bool:
     is_friend = profile.get("is_it_friend")
     return bool(is_friend)
 
+
+async def get_client_send_message(phone: str) -> bool:
+    """Получает значение send_message для клиента.
+
+    Args:
+        phone: Номер телефона клиента
+
+    Returns:
+        True если отправка сообщений разрешена, False если запрещена.
+        По умолчанию возвращает True если клиент не найден или поле не установлено.
+    """
+    profile = await get_client_by_phone(phone)
+    if not profile:
+        return True  # По умолчанию разрешено
+    
+    send_message = profile.get("send_message")
+    return bool(send_message) if send_message is not None else True
+

@@ -8,7 +8,10 @@ from supabase import AClient
 
 from src.agents.factory import AgentFactory
 from src.config.settings import settings
-from src.database.queries.clients_queries import get_client_by_phone
+from src.database.queries.clients_queries import (
+    get_client_by_phone,
+    get_client_send_message,
+)
 from src.database.queries.history_queries import get_conversation_history_count
 from src.models import (
     ClientProfileResponse,
@@ -21,6 +24,7 @@ from src.utils import get_supabase_client, remove_markdown_symbols
 from src.utils.memory import SupabaseConversationMemory
 from src.utils.phone_validator import normalize_phone, validate_phone
 from src.utils.prompts import get_prompt, get_system_value
+from src.utils.queue import send_delayed_message
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +39,7 @@ async def process_conversation_background(request: UserMessageRequest):
     """
 
     try:
-        logger.info(
-            f"[processConversation] Получен запрос для {request.client_phone}: "
-            f"message='{request.message}', topic='{request.topic}'"
-        )
-        
         memory = await SupabaseConversationMemory(request.client_phone)
-        logger.info(f"[processConversation] Память создана для {request.client_phone}, async_initialized={getattr(memory, 'async_initialized', False)}")
 
         factory = AgentFactory.instance()
         agent = factory.create_product_agent(config={"memory": memory})
@@ -60,14 +58,20 @@ async def process_conversation_background(request: UserMessageRequest):
             endpoint_name="processConversation",
         )
 
-
         try:
-            await send_message(
+            success = await send_message(
                 request.client_phone,
                 remove_markdown_symbols(response_text),
             )
+            if not success:
+                logger.error(
+                    f"[processConversation] Не удалось отправить сообщение в WhatsApp для {request.client_phone} (send_message вернул False)"
+                )
         except Exception as e:
-            logger.error(f"ОШИБКА: Ошибка отправки в WhatsApp для {request.client_phone}: {e}")
+            logger.error(
+                f"[processConversation] ОШИБКА: Ошибка отправки в WhatsApp для {request.client_phone}: {e}",
+                exc_info=True,
+            )
 
         return {"success": True}
 
@@ -125,7 +129,30 @@ async def process_conversation(
         )
         return {"success": False, "error": "Conversation not initialized"}
     
-    background_tasks.add_task(process_conversation_background, request)
+    # Проверка send_message
+    send_message_enabled = await get_client_send_message(request.client_phone)
+    if not send_message_enabled:
+        logger.info(
+            f"[processConversation] Игнорируем сообщение от {request.client_phone}: отправка сообщений отключена (send_message=false)"
+        )
+        return {"success": False, "error": "Message sending disabled"}
+    
+    # Отправка сообщения в очередь PGMQ с задержкой 15 минут
+    msg_id = await send_delayed_message(
+        client_phone=request.client_phone,
+        message=request.message,
+        topic=request.topic,
+    )
+    
+    if msg_id is None:
+        logger.error(
+            f"[processConversation] Не удалось добавить сообщение в очередь для {request.client_phone}"
+        )
+        return {"success": False, "error": "Failed to queue message"}
+    
+    logger.info(
+        f"[processConversation] Сообщение добавлено в очередь для {request.client_phone}, msg_id={msg_id}"
+    )
     return {"success": True}
 
 
