@@ -8,6 +8,8 @@ from supabase import AClient
 
 from src.agents.factory import AgentFactory
 from src.config.settings import settings
+from src.database.queries.clients_queries import get_client_by_phone
+from src.database.queries.history_queries import get_conversation_history_count
 from src.models import (
     ClientProfileResponse,
     InitConverastionRequest,
@@ -106,6 +108,23 @@ async def process_conversation(
         return {"success": False, "error": "Invalid phone number"}
 
     request.client_phone = normalized_phone
+    
+    # Проверка наличия клиента в БД
+    client = await get_client_by_phone(request.client_phone)
+    if client is None:
+        logger.info(
+            f"[processConversation] Игнорируем сообщение от {request.client_phone}: клиент не найден в БД"
+        )
+        return {"success": False, "error": "Client not found in database"}
+    
+    # Проверка, был ли вызван initConversation (есть ли записи в conversation_history)
+    history_count = await get_conversation_history_count(request.client_phone)
+    if history_count == 0:
+        logger.info(
+            f"[processConversation] Игнорируем сообщение от {request.client_phone}: разговор не был инициализирован через initConversation"
+        )
+        return {"success": False, "error": "Conversation not initialized"}
+    
     background_tasks.add_task(process_conversation_background, request)
     return {"success": True}
 
