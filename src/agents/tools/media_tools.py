@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import List
+import re
+from typing import Any, List, Union
 
 import httpx
 from langchain_core.tools import tool
@@ -11,6 +13,7 @@ from langchain_core.tools import tool
 from src.config.constants import HTTP_TIMEOUT_SECONDS
 from src.config.settings import settings
 from src.utils import get_supabase_client
+from src.agents.tools.context_tools import get_is_init_message
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +41,6 @@ async def send_whatsapp_image(phone: str, file_url: str, caption: str, extension
                 },
             )
             response.raise_for_status()
-            logger.debug(
-                f"[send_whatsapp_image] Файл успешно отправлен для {phone}, "
-                f"статус: {response.status_code}"
-            )
             return True
     except httpx.HTTPStatusError as e:
         logger.error(
@@ -57,50 +56,118 @@ async def send_whatsapp_image(phone: str, file_url: str, caption: str, extension
         return False
 
 
+def _parse_product_ids(product_ids: Union[List[int], List[str], str]) -> List[int]:
+    """Парсит ID товаров из различных форматов.
+    
+    Args:
+        product_ids: ID товаров в формате:
+            - List[int] - список чисел
+            - List[str] - список строк (преобразуется в int)
+            - str - строка с JSON {"product_ids": [...]} или "[PRODUCT_IDS]...[/PRODUCT_IDS]"
+    
+    Returns:
+        List[int] - список ID товаров
+    """
+    if not product_ids:
+        return []
+    
+    # Если это уже список чисел
+    if isinstance(product_ids, list):
+        parsed_ids = []
+        for pid in product_ids:
+            try:
+                if isinstance(pid, int):
+                    parsed_ids.append(pid)
+                elif isinstance(pid, str):
+                    parsed_id = int(pid.strip())
+                    parsed_ids.append(parsed_id)
+            except (ValueError, TypeError) as e:
+                logger.warning(f"[_parse_product_ids] Не удалось преобразовать ID '{pid}' в число: {e}")
+        return parsed_ids
+    
+    # Если это строка, пытаемся извлечь JSON
+    if isinstance(product_ids, str):
+        product_ids_str = product_ids.strip()
+        
+        # Пытаемся извлечь из [PRODUCT_IDS]...[/PRODUCT_IDS]
+        match = re.search(r'\[PRODUCT_IDS\](.*?)\[/PRODUCT_IDS\]', product_ids_str, re.DOTALL)
+        if match:
+            product_ids_str = match.group(1).strip()
+        
+        # Пытаемся распарсить как JSON
+        try:
+            data = json.loads(product_ids_str)
+            if isinstance(data, dict) and "product_ids" in data:
+                ids_list = data["product_ids"]
+            elif isinstance(data, list):
+                ids_list = data
+            else:
+                logger.warning(f"[_parse_product_ids] Неожиданный формат JSON: {data}")
+                return []
+            
+            # Преобразуем в список int
+            parsed_ids = []
+            for pid in ids_list:
+                try:
+                    parsed_id = int(pid) if not isinstance(pid, int) else pid
+                    parsed_ids.append(parsed_id)
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"[_parse_product_ids] Не удалось преобразовать ID '{pid}' в число: {e}")
+            return parsed_ids
+        except json.JSONDecodeError:
+            # Если не JSON, пытаемся извлечь числа из строки
+            logger.warning(f"[_parse_product_ids] Не удалось распарсить JSON, пытаемся извлечь числа из строки: {product_ids_str[:100]}")
+            numbers = re.findall(r'\d+', product_ids_str)
+            parsed_ids = []
+            for num_str in numbers:
+                try:
+                    parsed_ids.append(int(num_str))
+                except ValueError:
+                    pass
+            return parsed_ids
+    
+    return []
+
+
 def create_media_tools(client_phone: str, is_init_message: bool = False):
+    """Создает инструменты для работы с медиа.
+
+    Args:
+        client_phone: Номер телефона клиента
+        is_init_message: Если True, это init conversation (используется для обратной совместимости)
+
+    Returns:
+        Список инструментов для работы с медиа
+    """
     @tool
-    async def show_product_photos(product_ids: List[int]) -> str:
+    async def show_product_photos(product_ids: Any) -> str:
         """Отправляет фотографии товаров клиенту через WhatsApp.
 
         НАЗНАЧЕНИЕ: Отправляет фотографии товаров клиенту через WhatsApp
 
         Args:
-            product_ids: Список ID товаров для отправки фото.
-            Извлеки из секции [PRODUCT_IDS] ответа инструментов поиска.
+            product_ids: ID товаров для отправки фото.
+            Может быть:
+            - Список чисел: [1, 2, 3]
+            - Строка с JSON: '{"product_ids": [1, 2, 3]}'
+            - Строка с [PRODUCT_IDS]: '[PRODUCT_IDS]{"product_ids": [1, 2, 3]}[/PRODUCT_IDS]'
+            Извлеки ID из секции [PRODUCT_IDS] ответа инструментов поиска (vector_search, execute_sql_query, get_random_products).
 
         Returns:
             Статус отправки фотографий (количество отправленных, не отправленных, не найденных товаров)
         """
-        logger.info(f"[show_product_photos] Sending photos to {client_phone} for product_ids: {product_ids}")
-
-        if not product_ids:
-            return "Нет товаров для отправки фотографий."
-
-        MAX_PHOTOS_NORMAL = 3
-        MAX_PHOTOS_INIT = 2
+        logger.info(f"[show_product_photos] Получены product_ids (тип: {type(product_ids)}): {product_ids}")
         
-        original_count = len(product_ids)
+        # Парсим ID товаров из различных форматов
+        parsed_ids = _parse_product_ids(product_ids)
         
-        if is_init_message:
-            product_ids = product_ids[:MAX_PHOTOS_INIT]
-            if original_count > MAX_PHOTOS_INIT:
-                logger.info(f"[show_product_photos] Init conversation: ограничено с {original_count} до {MAX_PHOTOS_INIT} товаров")
-            else:
-                logger.info(f"[show_product_photos] Init conversation: отправка {len(product_ids)} фото")
-        else:
-            product_ids = product_ids[:MAX_PHOTOS_NORMAL]
-            if original_count > MAX_PHOTOS_NORMAL:
-                logger.warning(f"[show_product_photos] Обычный запрос: получено {original_count} ID, ограничено до {MAX_PHOTOS_NORMAL} фото")
-            else:
-                logger.info(f"[show_product_photos] Обычный запрос: отправка {len(product_ids)} фото")
-
         has_photo = []
         no_photo = []
         not_found = []
 
         supabase = await get_supabase_client()
 
-        for product_id in product_ids:
+        for product_id in parsed_ids:
             try:
                 result = (
                     await supabase.table("products")
@@ -144,20 +211,26 @@ def create_media_tools(client_phone: str, is_init_message: bool = False):
                 not_found.append(product_id)
 
         result_parts = []
+        
         if has_photo:
             result_parts.append(
-                f"УСПЕШНО ОТПРАВЛЕНО: Фотографии {len(has_photo)} товаров успешно отправлены клиенту через WhatsApp. "
+                f"✅ УСПЕШНО ОТПРАВЛЕНО: Фотографии {len(has_photo)} товаров успешно отправлены клиенту через WhatsApp. "
                 f"Клиент получил эти фотографии."
             )
+        
         if no_photo:
             result_parts.append(
-                f"НЕ ОТПРАВЛЕНО: Не удалось отправить фотографии {len(no_photo)} товаров. "
+                f"❌ НЕ ОТПРАВЛЕНО: Не удалось отправить фотографии {len(no_photo)} товаров. "
                 f"Товары найдены в базе данных, но фотографии либо отсутствуют, либо произошла ошибка при отправке. "
-                f"ВАЖНО: Несмотря на ошибку отправки фото, ты ДОЛЖЕН продолжить и сформировать текстовое сообщение с информацией о товарах для клиента."
+                f"\n\nКРИТИЧЕСКИ ВАЖНО: Несмотря на ошибку отправки фото, ты ОБЯЗАТЕЛЬНО ДОЛЖЕН:\n"
+                f"1. НЕ говорить что фото отправлены\n"
+                f"2. ВСЕГДА предложить товары текстом с полной информацией (название, поставщик, цена, регион)\n"
+                f"3. Сообщить что фото временно недоступны, но товары есть в наличии"
             )
+        
         if not_found:
             result_parts.append(
-                f"НЕ НАЙДЕНО: {len(not_found)} товаров не найдены в базе данных. "
+                f"⚠️ НЕ НАЙДЕНО: {len(not_found)} товаров не найдены в базе данных. "
                 f"Эти товары отсутствуют в каталоге."
             )
 

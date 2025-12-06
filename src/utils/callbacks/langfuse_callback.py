@@ -34,13 +34,13 @@ class LangfuseHandler(BaseCallbackHandler):
         Args:
             client_phone: Номер телефона клиента
             session_id: ID сессии (опционально)
-            trace_name: Имя трейса (по умолчанию "AgentExecutor")
+            trace_name: Имя трейса (по умолчанию "Agent")
             **kwargs: Дополнительные параметры для CallbackHandler
         """
         super().__init__()
 
         self.client_phone = client_phone
-        self.trace_name = trace_name or "AgentExecutor"
+        self.trace_name = trace_name or "Agent"
 
         self._langfuse_handler: Optional[LangfuseCallbackHandler] = None
         self._langfuse_client: Optional[Any] = None
@@ -106,10 +106,16 @@ class LangfuseHandler(BaseCallbackHandler):
             pass
 
     def _is_root_chain(self, serialized: Any) -> bool:
-        """Проверяет, является ли chain корневым AgentExecutor."""
+        """Проверяет, является ли chain корневым агентом."""
         if not serialized or not isinstance(serialized, dict):
             return False
-        return serialized.get('name') == "AgentExecutor"
+        name = serialized.get('name', '')
+        # Новый API использует разные имена, проверяем несколько вариантов
+        return (
+            name == "AgentExecutor" or  # Старый API (для совместимости)
+            name == "Agent" or  # Новый API
+            'agent' in name.lower()  # Любые вариации с "agent"
+        )
 
     def _modify_chain_name(self, serialized: Dict[str, Any]) -> Dict[str, Any]:
         """Изменяет имя chain на trace_name."""

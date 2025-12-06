@@ -37,5 +37,3 @@ def validate_sql_conditions(sql_conditions: str) -> None:
         pattern = r'\b' + re.escape(keyword) + r'\b'
         if re.search(pattern, sql_upper, re.IGNORECASE):
             raise ValueError(f"Обнаружена опасная SQL команда: {keyword}")
-
-    logger.debug(f"SQL условия прошли валидацию: {sql_conditions[:100]}...")

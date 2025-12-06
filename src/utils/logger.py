@@ -7,6 +7,8 @@ from pythonjsonlogger import jsonlogger
 
 
 class CustomJsonFormatter(jsonlogger.JsonFormatter):
+    """Кастомный JSON форматтер для структурированного логирования."""
+    
     def __init__(self, *args, **kwargs):
         kwargs.pop("json_ensure_ascii", None)
         super().__init__(*args, **kwargs)
@@ -52,6 +54,45 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
             return super().format(record)
 
 
+class ImportantOnlyFilter(logging.Filter):
+    """Фильтр для показа только важных логов.
+    
+    Показывает:
+    - Все ERROR и CRITICAL
+    - Все WARNING
+    - Только ключевые INFO (с определенными префиксами)
+    """
+    
+    # Префиксы важных INFO сообщений
+    IMPORTANT_INFO_PREFIXES = [
+        "[ProductAgent.run] ✅",
+        "[ProductAgent.run] ⚠️",
+        "[processConversation]",
+        "[initConversation]",
+        "[resetConversation]",
+        "ОШИБКА:",
+        "ERROR:",
+        "CRITICAL:",
+    ]
+    
+    def filter(self, record):
+        # Всегда показываем ERROR и CRITICAL
+        if record.levelno >= logging.ERROR:
+            return True
+        
+        # Всегда показываем WARNING
+        if record.levelno >= logging.WARNING:
+            return True
+        
+        # Для INFO - только важные сообщения
+        if record.levelno == logging.INFO:
+            message = record.getMessage()
+            return any(message.startswith(prefix) for prefix in self.IMPORTANT_INFO_PREFIXES)
+        
+        # Не показываем DEBUG
+        return False
+
+
 _logging_setup_done = False
 
 
@@ -70,10 +111,11 @@ def setup_logging():
     log_level = os.getenv("LOG_LEVEL", "INFO")
 
     root_logger = logging.getLogger()
-
     root_logger.handlers.clear()
 
-    for logger_name in logging.Logger.manager.loggerDict:
+    logger_names = list(logging.Logger.manager.loggerDict.keys())
+    
+    for logger_name in logger_names:
         logger_obj = logging.getLogger(logger_name)
         if hasattr(logger_obj, 'handlers'):
             logger_obj.handlers.clear()
@@ -91,15 +133,24 @@ def setup_logging():
         )
 
     console_handler.setFormatter(formatter)
+    
+    # Добавляем фильтр для показа только важных логов
+    important_filter = ImportantOnlyFilter()
+    console_handler.addFilter(important_filter)
 
     root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
     root_logger.addHandler(console_handler)
 
-    logging.getLogger("agents.tools").setLevel(logging.INFO)
-    logging.getLogger("utils.callbacks.langfuse_callback").setLevel(logging.INFO)
-    logging.getLogger("agents.product_agent").setLevel(logging.INFO)
+    # Устанавливаем уровни для специфичных логгеров
+    logging.getLogger("agents.tools").setLevel(logging.WARNING)  # Только WARNING и ERROR
+    logging.getLogger("utils.callbacks.langfuse_callback").setLevel(logging.WARNING)
+    logging.getLogger("utils.callbacks.reasoning_logger").setLevel(logging.WARNING)  # Убираем избыточные логи
+    logging.getLogger("agents.product_agent").setLevel(logging.INFO)  # Важные INFO остаются через фильтр
 
+    # Подавляем шумные библиотеки
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("langchain").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
 
     _logging_setup_done = True

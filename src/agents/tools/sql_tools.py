@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import re
 from typing import Dict, Optional
@@ -21,13 +19,11 @@ from src.config.settings import settings
 from src.database import get_pool
 from src.database.queries.products_queries import get_products_by_sql_conditions
 from src.utils import records_to_json, validate_sql_conditions
-from src.utils.field_normalizer import normalize_field_value
-from src.utils.price_calculator import calculate_final_price
 from src.utils.prompts import (
     escape_prompt_variables,
-    get_all_system_values,
     get_prompt,
 )
+from src.utils.product_formatter import format_products_list, create_product_ids_section
 
 logger = logging.getLogger(__name__)
 
@@ -112,45 +108,31 @@ COLUMNS:
 async def _generate_sql_from_text_impl(
     text_conditions: str,
     topic: Optional[str] = None,
-    is_init_message: bool = False,
 ) -> str:
     """Генерирует SQL запрос (WHERE условия или полный SELECT) из текстового описания на русском языке."""
     db_prompt = None
     if topic:
         db_prompt = await get_prompt(topic)
 
+    sql_rules_prompt = await get_prompt("SQL Generation Rules")
+    if not sql_rules_prompt:
+        logger.warning("[sql_tools] Промпт 'SQL Generation Rules' не найден в БД, используем базовые правила")
+
     try:
         schema_context = await get_products_table_schema()
     except Exception as e:
         raise ValueError(f"Не удалось получить схему таблиц: {e}") from e
 
-    schema_context = f"""
-    СХЕМА БАЗЫ ДАННЫХ: myaso
+    schema_section = f"СХЕМА БАЗЫ ДАННЫХ: myaso\n\n{schema_context}"
 
-    {await get_products_table_schema()}
+    parts = []
+    if db_prompt:
+        parts.append(db_prompt)
+    if sql_rules_prompt:
+        parts.append(sql_rules_prompt)
+    parts.append(schema_section)
 
-    ПРАВИЛА ГЕНЕРАЦИИ SQL:
-
-    1. ВЫБОР ТИПА ЗАПРОСА:
-       - Если запрос простой (только фильтрация по таблице) -> генерируй ТОЛЬКО WHERE условия (без SELECT/FROM)
-       - Если нужен JOIN  или сложные подзапросы -> генерируй ПОЛНЫЙ SELECT запрос
-
-    2. ДЛЯ WHERE УСЛОВИЙ (простой запрос):
-       - Генерируй ТОЛЬКО условия, БЕЗ SELECT/FROM/WHERE
-       - Используй ТОЛЬКО колонки из таблицы products
-
-    3. ДЛЯ ПОЛНОГО SELECT ЗАПРОСА (сложный запрос с JOIN/подзапросами):
-       - Генерируй ПОЛНЫЙ SELECT запрос: SELECT ... FROM myaso.products JOIN myaso.price_history ...
-       - Явно указывай схему myaso: myaso.products, myaso.price_history
-       - Запрос должен возвращать колонки из myaso.products (обязательно id)
-       - ВАЖНО: При JOIN с price_history ВСЕГДА используй DISTINCT или EXISTS, так как в price_history может быть несколько записей для одного товара
-
-    4. ОБЩИЕ ПРАВИЛА:
-       - Используй ТОЛЬКО колонки из списка выше! Никаких других колонок не существует!
-       - НЕ используй алиасы таблиц (p, ph, t и т.д.)
-       - НЕ используй ключевое слово AS для алиасов"""
-
-    system_prompt = f"{db_prompt}\n\n{schema_context}" if db_prompt else schema_context
+    system_prompt = "\n\n".join(parts)
     system_prompt = escape_prompt_variables(system_prompt)
 
     text2sql_llm = ChatOpenAI(
@@ -173,82 +155,22 @@ async def _generate_sql_from_text_impl(
 
     sql_query = result.content.strip()
 
+    # Убираем markdown code blocks если есть
     if sql_query.startswith("```"):
         lines = sql_query.split("\n")
-        sql_query = "\n".join(
-                    [line for line in lines if not line.strip().startswith("```")]
-        ).strip()
+        sql_query = "\n".join([line for line in lines if not line.strip().startswith("```")]).strip()
 
-    is_full_query = sql_query.upper().strip().startswith("SELECT")
-
-    if is_full_query:
-        products_aliases = re.findall(r'\bFROM\s+myaso\.products\s+(\w+)\b', sql_query, re.IGNORECASE)
-        price_history_aliases = re.findall(r'\bJOIN\s+myaso\.price_history\s+(\w+)\b', sql_query, re.IGNORECASE)
-        
-        for alias in products_aliases:
-            sql_query = re.sub(
-                rf'\b{alias}\.\*\b',
-                'myaso.products.*',
-                sql_query,
-                flags=re.IGNORECASE
-            )
-            sql_query = re.sub(
-                rf'\b{alias}\.(\w+)\b',
-                r'myaso.products.\1',
-                sql_query,
-                flags=re.IGNORECASE
-            )
-        
-        for alias in price_history_aliases:
-            sql_query = re.sub(
-                rf'\b{alias}\.(\w+)\b',
-                r'myaso.price_history.\1',
-                sql_query,
-                flags=re.IGNORECASE
-            )
-        
-        sql_query = re.sub(
-            r'\bFROM\s+myaso\.(\w+)\s+([a-zA-Z_][a-zA-Z0-9_]*)\b(?!\s+myaso\.)',
-            r'FROM myaso.\1',
-            sql_query,
-            flags=re.IGNORECASE
-        )
-        sql_query = re.sub(
-            r'\bJOIN\s+myaso\.(\w+)\s+([a-zA-Z_][a-zA-Z0-9_]*)\b(?!\s+myaso\.)',
-            r'JOIN myaso.\1',
-            sql_query,
-            flags=re.IGNORECASE
-        )
-        
-        for table in ("products", "price_history"):
-            sql_query = re.sub(
-                rf'\b(FROM|JOIN)\s+(?!myaso\.){table}\b',
-                rf'\1 myaso.{table}',
-                sql_query,
-                flags=re.IGNORECASE
-            )
-    else:
-        while sql_query.upper().strip().startswith("WHERE"):
-            sql_query = sql_query[5:].strip()
-
-        sql_query = re.sub(
-            r"\b[a-zA-Z_][a-zA-Z0-9_]*\.([a-zA-Z_][a-zA-Z0-9_]*)\b",
-            r"\1",
-            sql_query,
-        )
-        sql_query = re.sub(
-            r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s+AS\s+[a-zA-Z_][a-zA-Z0-9_]*\b",
-            r"\1",
-            sql_query,
-            flags=re.IGNORECASE,
-        )
+    # Убираем WHERE в начале если это WHERE условия
+    while sql_query.upper().strip().startswith("WHERE"):
+        sql_query = sql_query[5:].strip()
 
     if not sql_query:
         raise ValueError("LLM вернул пустой SQL запрос")
 
+    # Проверка на опасные команды
     sql_upper = sql_query.upper()
     for keyword in DANGEROUS_SQL_KEYWORDS:
-        if keyword in sql_upper:
+        if re.search(rf"\b{re.escape(keyword)}\b", sql_upper):
             logger.error(
                 "Обнаружена опасная SQL команда: %s в запросе: %s",
                 keyword,
@@ -256,17 +178,17 @@ async def _generate_sql_from_text_impl(
             )
             raise ValueError(f"Обнаружена опасная SQL команда: {keyword}")
 
-    validate_sql_conditions(sql_query)
+    # Валидация только для WHERE условий (не для полных SELECT)
+    if not sql_query.upper().strip().startswith("SELECT"):
+        validate_sql_conditions(sql_query)
+
     return sql_query
 
-def create_sql_tools(is_init_message: bool = False):
-    """Создает инструменты для работы с SQL с привязанным is_init_message.
-    
-    Args:
-        is_init_message: Если True, это init_conversation
+def create_sql_tools():
+    """Создает инструменты для работы с SQL.
     
     Returns:
-        Список инструментов с модифицированным generate_sql_from_text
+        Список инструментов для работы с SQL
     """
     @tool
     async def generate_sql_from_text(text_conditions: str, topic: Optional[str] = None) -> str:
@@ -287,10 +209,6 @@ def create_sql_tools(is_init_message: bool = False):
         - Запросы с JOIN
         - Сложные подзапросы
 
-        ВАЖНО - НЕ ИСПОЛЬЗУЙ АЛИАСЫ:
-        - Для WHERE условий: используй простые имена колонок (title, order_price_kg)
-        - Для полных SELECT: используй полные имена (myaso.products.title, myaso.price_history.price)
-
         Args:
             text_conditions: Текстовое описание условий на русском языке
             topic: Тема диалога для загрузки промпта из БД (опционально)
@@ -301,7 +219,6 @@ def create_sql_tools(is_init_message: bool = False):
         return await _generate_sql_from_text_impl(
             text_conditions=text_conditions,
             topic=topic,
-            is_init_message=is_init_message,
         )
 
     @tool
@@ -389,35 +306,8 @@ def create_sql_tools(is_init_message: bool = False):
             if not json_result:
                 return "Товары по указанным условиям не найдены."
 
-        products_list = []
-        product_ids = []
-        system_vars = await get_all_system_values()
-        
-        for product in json_result:
-            product_id = product.get("id")
-            if product_id:
-                product_ids.append(product_id)
-
-            title = product.get("title", "Не указано")
-            supplier = normalize_field_value(product.get("supplier_name"), "text")
-            order_price = product.get("order_price_kg")
-            region = normalize_field_value(product.get("from_region"), "text")
-            
-            final_price = calculate_final_price(order_price, system_vars, supplier_name=supplier)
-            
-            product_lines = [f"📦 {title}"]
-            product_lines.append(f"   Поставщик: {supplier}")
-            if final_price != "Цена по запросу":
-                product_lines.append(f"   Цена: {final_price}₽/кг")
-            else:
-                product_lines.append(f"   Цена: {final_price}")
-            product_lines.append(f"   Регион: {region}")
-            
-            products_list.append("\n".join(product_lines))
-
-        result_text = "\n\n".join(products_list)
-        ids_json = json.dumps({"product_ids": product_ids}) if product_ids else ""
-        ids_section = f"\n\n[PRODUCT_IDS]{ids_json}[/PRODUCT_IDS]" if ids_json else ""
+        result_text, product_ids = await format_products_list(json_result)
+        ids_section = create_product_ids_section(product_ids)
 
         if is_full_query:
             return f"Найдено строк: {len(json_result)}\n\n{result_text}{ids_section}"
@@ -425,5 +315,20 @@ def create_sql_tools(is_init_message: bool = False):
             more_text = "\n\n⚠️ В базе данных есть ещё товары, показываем первые 50. Используйте более конкретные критерии поиска для уточнения." if has_more else ""
         return f"Найдено товаров: {len(json_result)}{more_text}\n\n{result_text}{ids_section}"
 
-    return [generate_sql_from_text, execute_sql_query]
+    @tool
+    async def get_table_schema() -> str:
+        """Получает схему таблиц products и price_history.
+
+        Используй этот инструмент когда нужно узнать структуру таблиц перед генерацией SQL запроса.
+
+        Returns:
+            Схема таблиц products и price_history с описанием колонок
+        """
+        try:
+            return await get_products_table_schema()
+        except Exception as e:
+            logger.error(f"[get_table_schema] Ошибка получения схемы: {e}", exc_info=True)
+            return f"Не удалось получить схему таблиц: {e}"
+
+    return [generate_sql_from_text, execute_sql_query, get_table_schema]
 
