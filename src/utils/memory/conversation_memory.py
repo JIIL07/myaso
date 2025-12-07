@@ -26,7 +26,9 @@ from src.config.database_constants import (
     COLUMN_ROLE,
     TABLE_CONVERSATION_HISTORY,
 )
-from src.utils import AsyncMixin, get_supabase_client
+from src.utils.async_mixin import AsyncMixin
+from src.utils.supabase_client import get_supabase_client
+from src.utils.rules import get_rule_as_int
 
 logger = logging.getLogger(__name__)
 
@@ -117,13 +119,24 @@ class SupabaseConversationMemory(AsyncMixin, BaseChatMessageHistory):
         )
 
     async def get_messages(self) -> List[BaseMessage]:
-        """Возвращает сообщения в формате LangChain (по возрастанию времени)."""
+        """Возвращает сообщения в формате LangChain (по возрастанию времени).
+        
+        Ограничивает количество сообщений согласно MAX_HISTORY_MESSAGES из БД.
+        """
         assert self.supabase is not None, "Supabase client is not initialized"
+        
+        try:
+            max_history = await get_rule_as_int("MAX_HISTORY_MESSAGES")
+        except Exception as e:
+            logger.warning(f"[SupabaseConversationMemory] Не удалось загрузить MAX_HISTORY_MESSAGES из БД, используем 10: {e}")
+            max_history = 10
+        
         resp = (
             await self.supabase.table(TABLE_CONVERSATION_HISTORY)
             .select("*")
             .eq(COLUMN_CLIENT_PHONE, self.client_phone)
             .order(COLUMN_CREATED_AT, desc=False)
+            .limit(max_history)
             .execute()
         )
         data: Iterable[Dict[str, Any]] = getattr(resp, "data", [])

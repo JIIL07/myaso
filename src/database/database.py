@@ -10,6 +10,8 @@ from typing import Optional
 
 import asyncpg
 
+from src.utils.rules import get_rule_as_float, get_rule_as_int
+
 logger = logging.getLogger(__name__)
 
 _pool: Optional[asyncpg.Pool] = None
@@ -37,11 +39,21 @@ async def get_pool() -> asyncpg.Pool:
             )
 
         try:
+            try:
+                min_size = await get_rule_as_int("DB_POOL_MIN_SIZE")
+                max_size = await get_rule_as_int("DB_POOL_MAX_SIZE")
+                command_timeout = await get_rule_as_float("DB_COMMAND_TIMEOUT")
+            except Exception as e:
+                logger.warning(f"[database] Не удалось загрузить настройки пула из БД, используем значения по умолчанию: {e}")
+                min_size = 5
+                max_size = 20
+                command_timeout = 30.0
+            
             _pool = await asyncpg.create_pool(
                 dsn=db_dsn,
-                min_size=5,
-                max_size=20,
-                command_timeout=30.0,
+                min_size=min_size,
+                max_size=max_size,
+                command_timeout=command_timeout,
             )
             logger.info("Connection pool создан успешно")
         except Exception as e:

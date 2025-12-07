@@ -21,11 +21,10 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 
-from src.config.constants import (
-    AGENT_RECURSION_LIMIT,
-    DEFAULT_TEMPERATURE,
-    MAX_AGENT_EXECUTION_TIME,
-    MAX_AGENT_ITERATIONS,
+from src.utils.rules import (
+    get_all_instruction_rules,
+    get_rule_as_float,
+    get_rule_as_int,
 )
 from src.config.settings import settings
 from src.database.queries.clients_queries import get_client_is_friend
@@ -52,8 +51,6 @@ from .tools.product_tools import (
     get_product_by_title,
     find_similar_products,
     compare_products,
-    get_products_statistics,
-    get_recommendations_based_on_orders,
 )
 from .tools.sql_tools import create_sql_tools
 from .tools.context_vars import client_phone_context
@@ -109,7 +106,7 @@ class ProductAgent(BaseAgent):
                     model=settings.openrouter.model_id,
                     openai_api_key=settings.openrouter.openrouter_api_key,
                     openai_api_base=settings.openrouter.base_url,
-                    temperature=DEFAULT_TEMPERATURE,
+                    temperature=0.5,
                 )
             except Exception as e:
                 logger.error(
@@ -127,8 +124,6 @@ class ProductAgent(BaseAgent):
                 get_product_by_title,
                 find_similar_products,
                 compare_products,
-                get_products_statistics,
-                get_recommendations_based_on_orders,
                 get_random_products,
                 calculate_product_price,
             ]
@@ -160,26 +155,43 @@ class ProductAgent(BaseAgent):
         """Создаёт и возвращает список инструментов (требуется BaseAgent, но не используется)."""
         return self.tools
 
-    def _create_agent(
-        self, tools: Optional[List[Any]] = None
+    async def _create_agent(
+        self, tools: Optional[List[Any]] = None, max_iterations: Optional[int] = None
     ) -> Any:
-        """Создаёт агента через create_agent API.
+        """Создаёт агента через create_agent API с валидацией конфигурации.
 
         Args:
             tools: Список инструментов (если None, используются self.tools)
+            max_iterations: Максимальное количество итераций (загружается из БД если None)
 
         Returns:
             Runnable объект агента
+            
+        Raises:
+            ValueError: Если конфигурация невалидна
         """
-        system_prompt = self.SYSTEM_PROMPT
+        if not self.llm:
+            raise ValueError("LLM не инициализирован")
+        
+        system_prompt = self.SYSTEM_PROMPT or ""
         agent_tools = tools or self.tools
+        
+        if not agent_tools:
+            logger.warning("[ProductAgent._create_agent] Список инструментов пуст")
 
-        # Создаем middleware для ограничения вызовов модели и обработки ошибок
+        if max_iterations is None:
+            try:
+                max_iterations = await get_rule_as_int("MAX_AGENT_ITERATIONS")
+            except Exception:
+                max_iterations = 1000
+        
+        max_iterations = max(1, min(10000, max_iterations))
+
         middleware = [handle_tool_errors]
-        if MAX_AGENT_ITERATIONS > 0:
+        if max_iterations > 0:
             middleware.append(
                 ModelCallLimitMiddleware(
-                    run_limit=MAX_AGENT_ITERATIONS,
+                    run_limit=max_iterations,
                     exit_behavior="end",
                 )
             )
@@ -193,7 +205,7 @@ class ProductAgent(BaseAgent):
 
         return agent
 
-    def _get_agent(
+    async def _get_agent(
         self, tools: Optional[List[Any]] = None
     ) -> Any:
         """Получает агента из кэша или создает новый.
@@ -217,15 +229,13 @@ class ProductAgent(BaseAgent):
             cache_key = current_prompt_hash
 
         if cache_key not in self._agent_cache:
-            agent = self._create_agent(tools=agent_tools)
+            agent = await self._create_agent(tools=agent_tools)
             self._agent_cache[cache_key] = agent
             self._cached_prompt_hash = current_prompt_hash
         else:
-            # Проверяем, изменился ли промпт
             if current_prompt_hash != self._cached_prompt_hash:
-                # Промпт изменился - очищаем кэш и создаем новый агент
                 self._agent_cache.clear()
-                agent = self._create_agent(tools=agent_tools)
+                agent = await self._create_agent(tools=agent_tools)
                 self._agent_cache[cache_key] = agent
                 self._cached_prompt_hash = current_prompt_hash
             else:
@@ -263,22 +273,17 @@ class ProductAgent(BaseAgent):
             logger.error(f"[ProductAgent] Не удалось загрузить системные переменные: {e}")
 
         if db_prompt:
-            base_prompt = db_prompt + f"\n\n{self.DEFAULT_SYSTEM_PROMPT}"
+            base_prompt = f"{db_prompt}\n\n{self.DEFAULT_SYSTEM_PROMPT}".strip()
         else:
             base_prompt = self.DEFAULT_SYSTEM_PROMPT
 
         chat_history: List[BaseMessage] = []
-        if self.memory is not None:
+        if self.memory and is_memory_initialized(self.memory):
             try:
-                if not is_memory_initialized(self.memory):
-                    logger.warning(f"[ProductAgent] Память не инициализирована для {client_phone}, пропускаем загрузку истории")
-                    chat_history = []
-                else:
-                    memory_vars = await self.memory.load_memory_variables({}, return_messages=True)
-                    chat_history = memory_vars.get("history", [])
+                memory_vars = await self.memory.load_memory_variables({}, return_messages=True)
+                chat_history = memory_vars.get("history", [])
             except Exception as e:
-                logger.error(f"[ProductAgent] Не удалось загрузить память: {e}", exc_info=True)
-                chat_history = []
+                logger.error(f"[ProductAgent] Ошибка загрузки памяти: {e}", exc_info=True)
 
         client_is_friend = False
         try:
@@ -313,7 +318,6 @@ class ProductAgent(BaseAgent):
         Returns:
             Текст запроса пользователя без изменений
         """
-        # Агент сам определяет контекст на основе истории сообщений
         return user_input
 
     async def _execute_agent(
@@ -322,7 +326,7 @@ class ProductAgent(BaseAgent):
         agent_tools: List[Any],
         config: RunnableConfig,
     ) -> Dict[str, Any]:
-        """Выполняет агента с заданными сообщениями и инструментами с retry.
+        """Выполняет агента с заданными сообщениями и инструментами с retry и валидацией.
 
         Args:
             messages: Список сообщений для агента
@@ -333,17 +337,26 @@ class ProductAgent(BaseAgent):
             Результат выполнения агента
 
         Raises:
-            Exception: Если произошла ошибка при выполнении агента после всех попыток
+            ValueError: Если входные данные невалидны
+            AgentTimeoutError: Если агент превысил время выполнения
+            AgentExecutionError: Если произошла ошибка при выполнении агента после всех попыток
         """
         from src.utils.retry_utils import retry_async
         
-        agent = self._get_agent(tools=agent_tools)
+        agent = await self._get_agent(tools=agent_tools)
+        
+        try:
+            max_execution_time = await get_rule_as_int("MAX_AGENT_EXECUTION_TIME")
+            max_execution_time = max(1, min(7200, max_execution_time))
+        except Exception:
+            max_execution_time = 3600
+            logger.warning("[ProductAgent._execute_agent] Не удалось загрузить MAX_AGENT_EXECUTION_TIME, используем 3600")
         
         async def _invoke_agent():
-            if MAX_AGENT_EXECUTION_TIME > 0:
+            if max_execution_time > 0:
                 return await asyncio.wait_for(
                     agent.ainvoke({"messages": messages}, config=config),
-                    timeout=MAX_AGENT_EXECUTION_TIME,
+                    timeout=max_execution_time,
                 )
             else:
                 return await agent.ainvoke({"messages": messages}, config=config)
@@ -362,9 +375,9 @@ class ProductAgent(BaseAgent):
             return result
         except asyncio.TimeoutError as e:
             from src.utils.exceptions import AgentTimeoutError
-            error_msg = f"Агент превысил максимальное время выполнения ({MAX_AGENT_EXECUTION_TIME} секунд)"
+            error_msg = f"Агент превысил максимальное время выполнения ({max_execution_time} секунд)"
             logger.error(f"[ProductAgent._execute_agent] Timeout агента: {error_msg}")
-            raise AgentTimeoutError(error_msg, {"timeout": MAX_AGENT_EXECUTION_TIME}) from e
+            raise AgentTimeoutError(error_msg, {"timeout": max_execution_time}) from e
         except Exception as e:
             from src.utils.exceptions import AgentExecutionError
             error_msg = f"Ошибка при выполнении агента после всех попыток: {str(e)}"
@@ -388,17 +401,42 @@ class ProductAgent(BaseAgent):
             return response
         
         import re
-        # Удаляем [PRODUCT_IDS] секции
         response = re.sub(r'\[PRODUCT_IDS\].*?\[/PRODUCT_IDS\]', '', response, flags=re.DOTALL)
-        
-        # Удаляем лишние пробелы и переносы строк
         response = re.sub(r'\n{3,}', '\n\n', response)
         response = re.sub(r' {2,}', ' ', response)
-        
-        # Удаляем служебные метки типа "✅ УСПЕШНО ОТПРАВЛЕНО" из ответа (они для агента, не для клиента)
-        # Но оставляем эмодзи и важную информацию
-        
         return response.strip()
+
+    async def _validate_product_ids(self, product_ids: List[int]) -> List[int]:
+        """Валидирует список ID товаров, проверяя их существование в БД."""
+        if not product_ids:
+            return []
+        
+        try:
+            from src.utils.supabase_client import get_supabase_client
+            
+            supabase = await get_supabase_client()
+            validated_ids = []
+            batch_size = 100
+            
+            for i in range(0, len(product_ids), batch_size):
+                batch = product_ids[i:i + batch_size]
+                try:
+                    result = (
+                        await supabase.table("products")
+                        .select("id")
+                        .in_("id", batch)
+                        .execute()
+                    )
+                    
+                    if result.data:
+                        validated_ids.extend(row["id"] for row in result.data if row.get("id"))
+                except Exception:
+                    pass
+            
+            return validated_ids
+        except Exception as e:
+            logger.error(f"[ProductAgent._validate_product_ids] Ошибка валидации: {e}", exc_info=True)
+            return []
 
     def _extract_response(self, result: Dict[str, Any]) -> str:
         """Извлекает ответ агента из результата выполнения.
@@ -424,19 +462,16 @@ class ProductAgent(BaseAgent):
                             text_parts.append(item.get("text", ""))
                         elif isinstance(item, str):
                             text_parts.append(item)
-                    response_text = " ".join(text_parts) if text_parts else str(content)
+                    response_text = " ".join(text_parts) or str(content)
                 else:
-                    response_text = str(content) if content else ""
+                    response_text = str(content) or ""
                 break
 
-        # Fallback на output
         if not response_text:
             response_text = result.get("output", "")
         
-        # Постобработка ответа
         response_text = self._postprocess_response(response_text)
         
-        # Валидация
         if not response_text or len(response_text.strip()) < 3:
             response_text = "Упс, что-то пошло не так 😅. Попробуйте переформулировать запрос, и я обязательно помогу!"
 
@@ -465,7 +500,6 @@ class ProductAgent(BaseAgent):
                 logger.warning(f"[ProductAgent] Память не инициализирована для {client_phone}, пропускаем сохранение")
                 return
 
-            # Сохраняем оба сообщения - агент сам определит контекст
             await self.memory.add_messages([HumanMessage(content=user_input)])
             await self.memory.add_messages([AIMessage(content=response_text)])
         except Exception as e:
@@ -502,22 +536,33 @@ class ProductAgent(BaseAgent):
         )
 
         try:
-            logger.info(f"[ProductAgent.run] Начало обработки для {client_phone}, topic: {topic}")
+            try:
+                temperature = await get_rule_as_float("DEFAULT_TEMPERATURE")
+                temperature = max(0.0, min(2.0, temperature))
+                if hasattr(self.llm, 'temperature'):
+                    self.llm.temperature = temperature
+            except Exception:
+                pass
+            
+            try:
+                seed = await get_rule_as_int("LLM_SEED")
+                if hasattr(self.llm, 'seed'):
+                    self.llm.seed = seed
+            except Exception:
+                pass
 
             base_prompt, system_vars, client_info, chat_history = await self._load_prompt_and_context(
                 topic, client_phone
             )
 
-            # Загружаем все инструкции из БД динамически
-            from src.utils.prompts import get_all_instruction_prompts
+            instruction_rules = await get_all_instruction_rules()
             
-            instruction_prompts = await get_all_instruction_prompts()
-            
-            if instruction_prompts:
+            if instruction_rules:
                 instructions = []
-                for topic, prompt in instruction_prompts.items():
-                    if prompt:
-                        instructions.append(f"--- {topic} ---\n{prompt}")
+                for rule_name, rule_value in instruction_rules.items():
+                    if rule_value:
+                        display_name = rule_name.replace("_", " ").title()
+                        instructions.append(f"--- {display_name} ---\n{rule_value}")
                 
                 if instructions:
                     instructions_text = "\n\n".join(instructions)
@@ -548,6 +593,12 @@ class ProductAgent(BaseAgent):
                 StdOutCallbackHandler(),
             ]
 
+            try:
+                recursion_limit = await get_rule_as_int("AGENT_RECURSION_LIMIT")
+                recursion_limit = max(1, min(10000, recursion_limit))
+            except Exception:
+                recursion_limit = 1005
+            
             config: RunnableConfig = {
                 "callbacks": callbacks_list,
                 "metadata": {
@@ -557,7 +608,7 @@ class ProductAgent(BaseAgent):
                 },
                 "run_name": trace_name,
                 "tags": ["product_agent", "conversation", trace_name],
-                "recursion_limit": AGENT_RECURSION_LIMIT,
+                "recursion_limit": recursion_limit,
             }
 
             messages = []
@@ -568,7 +619,11 @@ class ProductAgent(BaseAgent):
             try:
                 result = await self._execute_agent(messages, agent_tools, config)
             except asyncio.TimeoutError:
-                error_msg = f"Агент превысил максимальное время выполнения ({MAX_AGENT_EXECUTION_TIME} секунд)"
+                try:
+                    max_execution_time = await get_rule_as_int("MAX_AGENT_EXECUTION_TIME")
+                except Exception:
+                    max_execution_time = 3600
+                error_msg = f"Агент превысил максимальное время выполнения ({max_execution_time} секунд)"
                 logger.error(f"[ProductAgent.run] Timeout агента: {error_msg}")
                 raise Exception(error_msg)
             except Exception as e:
@@ -585,34 +640,44 @@ class ProductAgent(BaseAgent):
                 tool_messages = [msg for msg in messages_result if isinstance(msg, ToolMessage)]
                 steps_count = len(tool_messages) if tool_messages else 0
                 
+                PRODUCT_SEARCH_TOOLS = {
+                    'vector_search',
+                    'execute_sql_query',
+                    'get_random_products',
+                    'find_similar_products',
+                }
+                
+                all_product_ids = []
+                
                 for tool_msg in tool_messages:
-                    if hasattr(tool_msg, 'artifact') and tool_msg.artifact is not None:
-                        if isinstance(tool_msg.artifact, list) and len(tool_msg.artifact) > 0:
-                            if all(isinstance(x, int) for x in tool_msg.artifact):
-                                try:
-                                    await save_product_ids_to_context(client_phone, tool_msg.artifact)
-                                    tool_name = getattr(tool_msg, 'name', 'unknown')
-                                    logger.info(
-                                        f"[ProductAgent.run] Сохранено {len(tool_msg.artifact)} product_ids "
-                                        f"в agent_context для {client_phone} из инструмента {tool_name}"
-                                    )
-                                except Exception as e:
-                                    logger.error(
-                                        f"[ProductAgent.run] Ошибка сохранения product_ids в agent_context: {e}",
-                                        exc_info=True
-                                    )
+                    tool_name = getattr(tool_msg, 'name', 'unknown')
+                    if tool_name not in PRODUCT_SEARCH_TOOLS:
+                        continue
+                    
+                    artifact = getattr(tool_msg, 'artifact', None)
+                    if artifact:
+                        for item in (artifact if isinstance(artifact, list) else [artifact]):
+                            try:
+                                all_product_ids.append(int(item))
+                            except (ValueError, TypeError):
+                                pass
+                
+                if all_product_ids:
+                    try:
+                        unique_ids = list(dict.fromkeys(all_product_ids))
+                        validated_ids = await self._validate_product_ids(unique_ids)
+                        if validated_ids:
+                            await save_product_ids_to_context(client_phone, validated_ids)
+                            invalid_ids = set(unique_ids) - set(validated_ids)
+                            if invalid_ids:
+                                logger.warning(f"[ProductAgent.run] Пропущены несуществующие product_ids: {sorted(invalid_ids)}")
+                    except Exception as e:
+                        logger.error(f"[ProductAgent.run] Ошибка сохранения product_ids: {e}", exc_info=True)
 
                 if steps_count == 0:
                     logger.warning(
-                        f"[ProductAgent.run] ⚠️ НЕТ ВЫЗОВОВ ИНСТРУМЕНТОВ для {client_phone}: "
-                        f"агент ответил БЕЗ вызова инструментов! "
+                        f"[ProductAgent.run] Нет вызовов инструментов для {client_phone}, "
                         f"user_input='{user_input[:200]}'"
-                    )
-                else:
-                    logger.info(
-                        f"[ProductAgent.run] ✅ Запрос обработан для {client_phone}: "
-                        f"использовано {steps_count} инструмент(ов), "
-                        f"response_length={len(response_text)}"
                     )
 
             await self._save_to_memory(user_input, response_text, chat_history, client_phone)

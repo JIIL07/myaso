@@ -7,7 +7,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from src.config.settings import settings
-from src.utils import get_supabase_client
+from src.utils.supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 

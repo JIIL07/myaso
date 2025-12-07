@@ -2,7 +2,6 @@
 
 from contextvars import ContextVar
 
-# Контекстная переменная для хранения client_phone
 client_phone_context: ContextVar[str] = ContextVar('client_phone', default='')
 
 

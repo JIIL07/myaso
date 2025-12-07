@@ -27,9 +27,9 @@ async def format_product(
         system_vars = await get_all_system_values()
 
     title = product.get("title", "Не указано")
-    supplier = normalize_field_value(product.get("supplier_name"), "text")
+    supplier = await normalize_field_value(product.get("supplier_name"), "text")
     order_price = product.get("order_price_kg")
-    region = normalize_field_value(product.get("from_region"), "text")
+    region = await normalize_field_value(product.get("from_region"), "text")
 
     final_price = calculate_final_price(order_price, system_vars, supplier_name=supplier)
 

@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
-from src.config.constants import MAX_HISTORY_FOR_REWRITING
+from src.utils.rules import get_rule_as_bool, get_rule_as_int
 from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -29,26 +29,33 @@ async def rewrite_query_with_context(
     Returns:
         Переформулированный запрос
     """
-    # Если rewriting отключен, возвращаем исходный запрос
-    from src.config.constants import ENABLE_QUERY_REWRITING
-    if not ENABLE_QUERY_REWRITING:
+    try:
+        enable_rewriting = await get_rule_as_bool("ENABLE_QUERY_REWRITING")
+    except Exception as e:
+        logger.warning(f"[query_rewriter] Не удалось загрузить ENABLE_QUERY_REWRITING из БД, используем False: {e}")
+        enable_rewriting = False
+    
+    if not enable_rewriting:
         return query
 
     try:
-        # Извлекаем последние N сообщений из истории
-        recent_messages = chat_history[-MAX_HISTORY_FOR_REWRITING:] if chat_history else []
+        try:
+            max_history = await get_rule_as_int("MAX_HISTORY_FOR_REWRITING")
+        except Exception as e:
+            logger.warning(f"[query_rewriter] Не удалось загрузить MAX_HISTORY_FOR_REWRITING из БД, используем 10: {e}")
+            max_history = 10
         
-        # Формируем контекст из истории
+        recent_messages = chat_history[-max_history:] if chat_history else []
+        
         history_context = []
         for msg in recent_messages:
             if isinstance(msg, HumanMessage):
                 history_context.append(f"Пользователь: {msg.content}")
             else:
-                history_context.append(f"Ассистент: {msg.content[:200]}")  # Ограничиваем длину
+                history_context.append(f"Ассистент: {msg.content[:200]}")
         
         history_text = "\n".join(history_context) if history_context else "История пуста"
         
-        # Формируем промпт для rewriting
         rewriting_prompt = f"""Переформулируй запрос пользователя с учетом контекста разговора.
 
 История разговора:
@@ -64,12 +71,11 @@ async def rewrite_query_with_context(
 
 Переформулированный запрос:"""
 
-        # Используем LLM для rewriting
         llm = ChatOpenAI(
             model=settings.openrouter.model_id,
             openai_api_key=settings.openrouter.openrouter_api_key,
             openai_api_base=settings.openrouter.base_url,
-            temperature=0.3,  # Низкая температура для более детерминированного rewriting
+            temperature=0.3,
         )
 
         result = await llm.ainvoke(rewriting_prompt)
@@ -80,7 +86,6 @@ async def rewrite_query_with_context(
 
     except Exception as e:
         logger.error(f"[query_rewriter] Ошибка при переформулировке запроса: {e}", exc_info=True)
-        # В случае ошибки возвращаем исходный запрос
         return query
 
 
@@ -102,24 +107,20 @@ def extract_preferences_from_history(chat_history: List[BaseMessage]) -> Dict[st
     }
 
     try:
-        # Простой анализ последних сообщений
-        for msg in chat_history[-5:]:  # Анализируем последние 5 сообщений
+        for msg in chat_history[-5:]:
             if isinstance(msg, HumanMessage):
                 content_lower = msg.content.lower()
                 
-                # Извлекаем упоминания регионов
                 if "москва" in content_lower or "московск" in content_lower:
                     preferences["regions"].append("Москва")
                 if "спб" in content_lower or "санкт-петербург" in content_lower:
                     preferences["regions"].append("Санкт-Петербург")
                 
-                # Извлекаем упоминания охлажденного/замороженного
                 if "охлажден" in content_lower:
                     preferences["cooled_or_frozen"] = "охлажденное"
                 elif "заморожен" in content_lower:
                     preferences["cooled_or_frozen"] = "замороженное"
         
-        # Удаляем дубликаты
         preferences["regions"] = list(set(preferences["regions"]))
         preferences["product_types"] = list(set(preferences["product_types"]))
         preferences["suppliers"] = list(set(preferences["suppliers"]))

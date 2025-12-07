@@ -11,7 +11,7 @@ from src.config.messages_constants import (
     SYSTEM_VALUE_PRICELIST,
 )
 from src.services.whatsapp_service import send_image, send_message
-from src.utils import remove_markdown_symbols
+from src.utils.async_mixin import remove_markdown_symbols
 from src.utils.prompts import get_prompt, get_system_value
 
 logger = logging.getLogger(__name__)

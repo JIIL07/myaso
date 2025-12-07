@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 from src.database import get_pool
 from src.models.entities import Product
-from src.utils import records_to_json
+from src.utils.async_mixin import records_to_json
 
 
 async def get_random_products(limit: int = 10) -> List[Product]:

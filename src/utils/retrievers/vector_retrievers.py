@@ -11,10 +11,9 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from openai import OpenAI
 
-from src.config.constants import (
-    DEFAULT_VECTOR_SEARCH_K,
-    EMBEDDING_BATCH_SIZE,
-    EMBEDDING_DELAY_SECONDS,
+from src.utils.rules import (
+    get_rule_as_float,
+    get_rule_as_int,
 )
 from src.config.settings import settings
 from src.database import get_pool
@@ -33,7 +32,7 @@ class SupabaseVectorRetriever(BaseRetriever):
         *,
         embedding_model: str | None = None,
         db_dsn: str | None = None,
-        k: int = DEFAULT_VECTOR_SEARCH_K,
+        k: int | None = None,
     ) -> None:
         """Инициализация ретривера.
 
@@ -107,7 +106,14 @@ class SupabaseVectorRetriever(BaseRetriever):
             Список Document объектов с найденными товарами
         """
         if k is None:
-            k = self._k
+            if self._k is None:
+                try:
+                    k = await get_rule_as_int("DEFAULT_VECTOR_SEARCH_K")
+                except Exception as e:
+                    logger.warning(f"[vector_retrievers] Не удалось загрузить DEFAULT_VECTOR_SEARCH_K из БД, используем 10: {e}")
+                    k = 10
+            else:
+                k = self._k
         return await self._get_relevant_documents(query, k=k)
 
     async def _get_relevant_documents(self, query: str, k: int) -> List[Document]:
@@ -119,7 +125,6 @@ class SupabaseVectorRetriever(BaseRetriever):
         """
         vector = await self._embed(query)
 
-        # Если k очень большое, получаем все товары без LIMIT
         use_limit = k < 100000
 
         try:
@@ -225,16 +230,22 @@ class SupabaseVectorRetriever(BaseRetriever):
         return " ".join(parts)
 
     async def _embed_products(
-        self, delay: float = EMBEDDING_DELAY_SECONDS
+        self, delay: float | None = None
     ) -> Dict[str, int]:
         """Создает embedding для всех товаров без embedding в базе данных.
 
         Args:
-            delay: Задержка между запросами к API embedding в секундах (по умолчанию 0.1)
+            delay: Задержка между запросами к API embedding в секундах (загружается из БД если None)
 
         Returns:
             Словарь с результатами: {"processed": int, "errors": int, "total": int}
         """
+        if delay is None:
+            try:
+                delay = await get_rule_as_float("EMBEDDING_DELAY_SECONDS")
+            except Exception as e:
+                logger.warning(f"[vector_retrievers] Не удалось загрузить EMBEDDING_DELAY_SECONDS из БД, используем 0.1: {e}")
+                delay = 0.1
         try:
             pool = await get_pool()
             async with pool.acquire() as conn:
@@ -291,7 +302,13 @@ class SupabaseVectorRetriever(BaseRetriever):
 
                         processed += 1
 
-                        if processed % EMBEDDING_BATCH_SIZE == 0:
+                        try:
+                            batch_size = await get_rule_as_int("EMBEDDING_BATCH_SIZE")
+                        except Exception as e:
+                            logger.warning(f"[vector_retrievers] Не удалось загрузить EMBEDDING_BATCH_SIZE из БД, используем 10: {e}")
+                            batch_size = 10
+
+                        if processed % batch_size == 0:
                             logger.info(f"Обработано: {processed}/{total}")
 
                         if delay > 0:

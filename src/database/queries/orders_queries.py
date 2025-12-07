@@ -8,7 +8,7 @@ from src.config.database_constants import (
     TABLE_ORDERS,
 )
 from src.models.entities import Order
-from src.utils import get_supabase_client
+from src.utils.supabase_client import get_supabase_client
 
 
 async def get_client_orders(phone: str) -> List[Order]:

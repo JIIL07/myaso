@@ -43,12 +43,51 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Создать триггер для автоматического удаления сообщений при send_message = false
+-- Создать функцию для очистки истории разговора (оставляет только одно первое сообщение)
+CREATE OR REPLACE FUNCTION myaso.clear_conversation_history_keep_one(
+    p_client_phone VARCHAR
+)
+RETURNS INTEGER AS $$
+DECLARE
+    v_deleted_count INTEGER := 0;
+    v_total_count INTEGER := 0;
+BEGIN
+    -- Подсчитываем общее количество сообщений
+    SELECT COUNT(*) INTO v_total_count
+    FROM myaso.conversation_history
+    WHERE client_phone = p_client_phone;
+    
+    -- Если сообщений больше 1, удаляем все кроме первого
+    IF v_total_count > 1 THEN
+        -- Удаляем все сообщения кроме одного первого (по времени создания)
+        -- Используем подзапрос для исключения первого сообщения
+        DELETE FROM myaso.conversation_history
+        WHERE client_phone = p_client_phone
+          AND ctid NOT IN (
+              SELECT ctid
+              FROM myaso.conversation_history
+              WHERE client_phone = p_client_phone
+              ORDER BY created_at ASC
+              LIMIT 1
+          );
+        
+        GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    END IF;
+    
+    RETURN v_deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Создать триггер для автоматического удаления сообщений и очистки истории при send_message = false
 CREATE OR REPLACE FUNCTION myaso.trigger_delete_messages_on_send_message_false()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.send_message = FALSE AND (OLD.send_message IS NULL OR OLD.send_message = TRUE) THEN
+        -- Удаляем сообщения из очереди PGMQ
         PERFORM myaso.delete_client_messages(NEW.phone);
+        
+        -- Очищаем историю разговора, оставляя только одно первое сообщение
+        PERFORM myaso.clear_conversation_history_keep_one(NEW.phone);
     END IF;
     
     RETURN NEW;

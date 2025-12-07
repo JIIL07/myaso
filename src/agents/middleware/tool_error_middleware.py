@@ -23,11 +23,9 @@ async def handle_tool_errors(request: Any, handler: Any) -> Any:
         Результат выполнения инструмента или ToolMessage с ошибкой
     """
     try:
-        # Проверяем, является ли handler корутиной (async функцией)
         if isinstance(handler, Awaitable):
             result = await handler
         elif callable(handler):
-            # Проверяем, является ли handler async функцией
             result = handler(request)
             if isinstance(result, Awaitable):
                 result = await result
@@ -36,7 +34,6 @@ async def handle_tool_errors(request: Any, handler: Any) -> Any:
         
         return result
     except Exception as e:
-        # Извлекаем информацию об инструменте
         tool_name = "unknown"
         tool_call_id = ""
         
@@ -55,7 +52,6 @@ async def handle_tool_errors(request: Any, handler: Any) -> Any:
             exc_info=True
         )
 
-        # Специальная обработка для show_product_photos
         if tool_name == "show_product_photos":
             return ToolMessage(
                 content=(
@@ -66,7 +62,6 @@ async def handle_tool_errors(request: Any, handler: Any) -> Any:
                 tool_call_id=tool_call_id,
             )
 
-        # Общая обработка для других инструментов
         return ToolMessage(
             content=f"Ошибка выполнения инструмента {tool_name}: {error_msg}. Попробуйте другой подход или уточните запрос.",
             tool_call_id=tool_call_id,

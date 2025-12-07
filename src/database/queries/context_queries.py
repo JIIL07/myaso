@@ -5,7 +5,7 @@ from src.config.database_constants import (
     COLUMN_CONTEXT_DATA,
     TABLE_AGENT_CONTEXT,
 )
-from src.utils import get_supabase_client
+from src.utils.supabase_client import get_supabase_client
 
 
 async def get_agent_context_from_db(client_phone: str) -> Dict[str, Any]:

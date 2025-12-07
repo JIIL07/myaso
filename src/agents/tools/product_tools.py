@@ -23,7 +23,7 @@ from src.utils.prompts import get_all_system_values
 from src.utils.retrievers import SupabaseVectorRetriever
 from src.utils.product_formatter import format_products_list
 from src.utils.price_calculator import calculate_final_price
-from src.utils import records_to_json
+from src.utils.async_mixin import records_to_json
 from src.database import get_pool
 from src.agents.tools.context_tools import get_require_photo
 from src.agents.tools.context_vars import get_client_phone
@@ -51,17 +51,12 @@ async def vector_search(query: str, k: int = 10, require_photo: bool = False) ->
     Returns:
         Кортеж (текст с результатами, список ID товаров как artifact)
     """
-    if not require_photo:
-        # Пытаемся получить из контекста (требует client_phone, но мы не знаем его здесь)
-        pass
     retriever = SupabaseVectorRetriever()
-
     k = min(k, 50)
 
     try:
         search_k = 250 if require_photo else k
         documents = await retriever.get_relevant_documents(query, k=search_k)
-        # Получаем больше товаров для фильтрации по фото если требуется
     except Exception as e:
         logger.error(f"Ошибка при поиске по запросу '{query}': {e}", exc_info=True)
         return ERROR_MESSAGE_PRODUCTS_NOT_FOUND, []
@@ -69,7 +64,6 @@ async def vector_search(query: str, k: int = 10, require_photo: bool = False) ->
     if not documents:
         return ERROR_MESSAGE_PRODUCTS_NOT_FOUND, []
 
-    # Фильтрация по наличию фото ДО обработки результатов (если требуется)
     if require_photo:
         documents = [
             doc for doc in documents
@@ -91,8 +85,6 @@ async def vector_search(query: str, k: int = 10, require_photo: bool = False) ->
         })
 
     result_text, product_ids = await format_products_list(products)
-    
-    # Возвращаем кортеж: (текст, artifact с product_ids)
     return f"Найдено товаров: {len(products)}\n\n{result_text}", product_ids
 
 
@@ -199,7 +191,6 @@ async def find_similar_products(product_id: int, k: int = 10) -> Tuple[str, List
         from src.utils import get_supabase_client
         supabase = await get_supabase_client()
 
-        # Получаем товар
         result = (
             await supabase.table("products")
             .select("*")
@@ -216,11 +207,9 @@ async def find_similar_products(product_id: int, k: int = 10) -> Tuple[str, List
         if not product_title:
             return f"У товара с ID {product_id} нет названия для поиска похожих товаров.", []
 
-        # Используем векторный поиск для поиска похожих товаров
         retriever = SupabaseVectorRetriever()
         documents = await retriever.get_relevant_documents(product_title, k=k + 1)
 
-        # Исключаем сам товар из результатов
         similar_products = [
             doc.metadata for doc in documents
             if doc.metadata.get('id') != product_id
@@ -323,145 +312,3 @@ async def compare_products(product_ids: List[int]) -> str:
     except Exception as e:
         logger.error(f"[compare_products] Ошибка при сравнении товаров: {e}", exc_info=True)
         return f"Ошибка при сравнении товаров: {str(e)}"
-
-
-@tool
-async def get_products_statistics(stat_type: str = "cheapest", limit: int = 10) -> str:
-    """Получает статистику по товарам.
-
-    НАЗНАЧЕНИЕ: Получение статистики по товарам (самые дешевые, самые дорогие)
-
-    ИСПОЛЬЗУЙ ДЛЯ:
-    - Когда клиент спрашивает про самые дешевые товары
-    - Когда клиент спрашивает про самые дорогие товары
-    - Для получения топ товаров по цене
-    - Для аналитики по каталогу
-
-    НЕ ИСПОЛЬЗУЙ ЕСЛИ:
-    - Клиент ищет конкретные товары (используй vector_search)
-    - Нужна статистика по другим критериям (пока поддерживается только по цене)
-
-    Args:
-        stat_type: Тип статистики:
-            - "cheapest" - самые дешевые товары (по умолчанию)
-            - "expensive" - самые дорогие товары
-        limit: Количество результатов (по умолчанию 10, максимум 20)
-
-    Returns:
-        Отформатированная статистика с информацией о товарах
-    """
-    limit = min(limit, 20)
-
-    try:
-        pool = await get_pool()
-
-        async with pool.acquire() as conn:
-            if stat_type == "cheapest":
-                result = await conn.fetch(
-                    """
-                    SELECT id, title, supplier_name, from_region, order_price_kg, photo
-                    FROM myaso.products
-                    WHERE order_price_kg > 0
-                    ORDER BY order_price_kg ASC
-                    LIMIT $1
-                    """,
-                    limit
-                )
-                stat_title = "Самые дешевые товары"
-            elif stat_type == "expensive":
-                result = await conn.fetch(
-                    """
-                    SELECT id, title, supplier_name, from_region, order_price_kg, photo
-                    FROM myaso.products
-                    WHERE order_price_kg > 0
-                    ORDER BY order_price_kg DESC
-                    LIMIT $1
-                    """,
-                    limit
-                )
-                stat_title = "Самые дорогие товары"
-            else:
-                return f"Неизвестный тип статистики: {stat_type}. Используйте 'cheapest' или 'expensive'."
-
-            products_dict = records_to_json(result)
-            result_text, _ = await format_products_list(products_dict)
-
-            return f"{stat_title} ({len(products_dict)} товаров):\n\n{result_text}"
-    except ValueError as e:
-        logger.error(f"[get_products_statistics] Ошибка валидации: {e}", exc_info=True)
-        return f"Ошибка валидации: {str(e)}. Проверьте параметры запроса."
-    except RuntimeError as e:
-        logger.error(f"[get_products_statistics] Ошибка подключения к базе данных: {e}", exc_info=True)
-        return "Ошибка подключения к базе данных. Попробуйте позже."
-    except Exception as e:
-        logger.error(f"[get_products_statistics] Ошибка при получении статистики: {e}", exc_info=True)
-        return f"Ошибка при получении статистики: {str(e)}"
-
-
-@tool(response_format="content_and_artifact")
-async def get_recommendations_based_on_orders(phone: str, limit: int = 10) -> Tuple[str, List[int]]:
-    """Получает рекомендации товаров на основе истории заказов клиента.
-
-    НАЗНАЧЕНИЕ: Персонализированные рекомендации товаров на основе истории заказов
-
-    ИСПОЛЬЗУЙ ДЛЯ:
-    - Когда клиент просит "что-то похожее на то, что я заказывал"
-    - Для персонализированных рекомендаций
-    - Когда клиент не знает, что заказать
-    - Для предложения товаров на основе предыдущих покупок
-
-    НЕ ИСПОЛЬЗУЙ ЕСЛИ:
-    - У клиента нет истории заказов (используй vector_search или get_random_products)
-    - Клиент ищет конкретные товары (используй vector_search или get_product_by_title)
-
-    Args:
-        phone: Номер телефона клиента (в формате +7XXXXXXXXXX или 8XXXXXXXXXX)
-        limit: Количество рекомендаций (по умолчанию 10, максимум 20)
-
-    Returns:
-        Кортеж (текст с рекомендациями, список ID товаров как artifact)
-    """
-    limit = min(limit, 20)
-
-    try:
-        orders = await get_client_orders_db(phone)
-        if not orders:
-            return "У вас нет истории заказов для рекомендаций. Попробуйте использовать vector_search для поиска товаров.", []
-
-        # Извлекаем названия товаров из заказов
-        ordered_titles = [order.title for order in orders if order.title]
-        if not ordered_titles:
-            return "В истории заказов нет информации о товарах для рекомендаций.", []
-
-        # Используем векторный поиск для каждого заказанного товара
-        retriever = SupabaseVectorRetriever()
-
-        all_products = {}
-        for title in ordered_titles[:5]:  # Берем максимум 5 последних заказов
-            try:
-                documents = await retriever.get_relevant_documents(title, k=5)
-                for doc in documents:
-                    product_id = doc.metadata.get('id')
-                    if product_id and product_id not in all_products:
-                        all_products[product_id] = doc.metadata
-            except Exception as e:
-                logger.warning(f"[get_recommendations_based_on_orders] Ошибка при поиске рекомендаций для '{title}': {e}")
-                continue
-
-        if not all_products:
-            return "Не удалось найти рекомендации на основе ваших заказов.", []
-
-        # Преобразуем в список для форматирования
-        products_list = list(all_products.values())[:limit]
-        result_text, product_ids = await format_products_list(products_list)
-
-        return f"Рекомендации на основе ваших заказов ({len(products_list)} товаров):\n\n{result_text}", product_ids
-    except ValueError as e:
-        logger.error(f"[get_recommendations_based_on_orders] Ошибка валидации: {e}", exc_info=True)
-        return f"Ошибка валидации: {str(e)}. Проверьте параметры запроса.", []
-    except RuntimeError as e:
-        logger.error(f"[get_recommendations_based_on_orders] Ошибка подключения к базе данных: {e}", exc_info=True)
-        return "Ошибка подключения к базе данных. Попробуйте позже.", []
-    except Exception as e:
-        logger.error(f"[get_recommendations_based_on_orders] Ошибка при получении рекомендаций: {e}", exc_info=True)
-        return f"Ошибка при получении рекомендаций: {str(e)}", []

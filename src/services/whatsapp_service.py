@@ -5,7 +5,7 @@ from typing import Optional
 
 import httpx
 
-from src.config.constants import HTTP_TIMEOUT_SECONDS
+from src.utils.rules import get_rule_as_float
 from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,14 @@ async def send_message(recipient: str, message: str) -> bool:
         True если сообщение отправлено успешно, False иначе
     """
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+        # Загружаем HTTP_TIMEOUT_SECONDS из БД
+        try:
+            timeout = await get_rule_as_float("HTTP_TIMEOUT_SECONDS")
+        except Exception as e:
+            logger.warning(f"[whatsapp_service] Не удалось загрузить HTTP_TIMEOUT_SECONDS из БД, используем 10.0: {e}")
+            timeout = 10.0
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 settings.whatsapp.send_message_url,
                 json={"recipient": recipient, "message": message},
@@ -47,7 +54,14 @@ async def send_image(recipient: str, file_url: str, caption: Optional[str] = Non
         True если файл отправлен успешно, False иначе
     """
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+        # Загружаем HTTP_TIMEOUT_SECONDS из БД
+        try:
+            timeout = await get_rule_as_float("HTTP_TIMEOUT_SECONDS")
+        except Exception as e:
+            logger.warning(f"[whatsapp_service] Не удалось загрузить HTTP_TIMEOUT_SECONDS из БД, используем 10.0: {e}")
+            timeout = 10.0
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 settings.whatsapp.send_file_url,
                 json={

@@ -11,7 +11,6 @@ from langfuse import Langfuse
 from langfuse.callback import CallbackHandler as LangfuseCallbackHandler
 
 from src.config.settings import settings
-from src.utils.callbacks.reasoning_extractor import ReasoningExtractor
 
 
 
@@ -67,7 +66,6 @@ class LangfuseHandler(BaseCallbackHandler):
 
         self._trace_id: Optional[str] = None
         self._run_manager: Optional[Any] = None
-        self._reasoning_extractor = ReasoningExtractor()
 
 
     def _update_trace_id(self, **kwargs) -> None:
@@ -163,92 +161,6 @@ class LangfuseHandler(BaseCallbackHandler):
                 self._langfuse_handler.on_tool_error(error, **kwargs)
             except Exception:
                 pass
-
-    def on_llm_end(self, response: Any, **kwargs: Any) -> None:
-        """Вызывается когда LLM завершает выполнение.
-        
-        Извлекает reasoning и thinking из ответа и передает их в LangFuse.
-        
-        Args:
-            response: Ответ от LLM
-            **kwargs: Дополнительные параметры (run_id, run_manager и т.д.)
-        """
-        try:
-            reasoning_data = self._reasoning_extractor.extract_reasoning_from_response(response)
-            
-            reasoning_metadata = {}
-            if reasoning_data.get("has_reasoning"):
-                if reasoning_data.get("reasoning_text"):
-                    reasoning_metadata["reasoning"] = reasoning_data["reasoning_text"]
-                if reasoning_data.get("thinking_text"):
-                    reasoning_metadata["thinking"] = reasoning_data["thinking_text"]
-                if reasoning_data.get("reasoning_tokens"):
-                    reasoning_metadata["reasoning_tokens"] = reasoning_data["reasoning_tokens"]
-
-            if reasoning_metadata and "metadata" in kwargs:
-                kwargs["metadata"] = {**kwargs.get("metadata", {}), **reasoning_metadata}
-            elif reasoning_metadata:
-                kwargs["metadata"] = reasoning_metadata
-
-            if self._langfuse_handler:
-                try:
-                    self._langfuse_handler.on_llm_end(response, **kwargs)
-                except Exception:
-                    pass
-
-            if reasoning_data.get("has_reasoning"):
-                self._update_langfuse_generation_with_reasoning(reasoning_data, **kwargs)
-
-        except Exception:
-            if self._langfuse_handler:
-                try:
-                    self._langfuse_handler.on_llm_end(response, **kwargs)
-                except Exception:
-                    pass
-
-    def _update_langfuse_generation_with_reasoning(
-        self,
-        reasoning_data: Dict[str, Any],
-        **kwargs: Any
-    ) -> None:
-        """Обновляет generation в LangFuse с reasoning данными через прямой API.
-        
-        Args:
-            reasoning_data: Словарь с reasoning данными
-            **kwargs: Дополнительные параметры (run_id и т.д.)
-        """
-        if not self._langfuse_client:
-            return
-
-        try:
-            run_id = kwargs.get("run_id")
-            if not run_id:
-                return
-
-            metadata = {}
-            
-            if reasoning_data.get("reasoning_text"):
-                metadata["reasoning"] = reasoning_data["reasoning_text"]
-            
-            if reasoning_data.get("thinking_text"):
-                metadata["thinking"] = reasoning_data["thinking_text"]
-            
-            if reasoning_data.get("reasoning_tokens"):
-                metadata["reasoning_tokens"] = reasoning_data["reasoning_tokens"]
-
-            if not metadata:
-                return
-
-            try:
-                if self._langfuse_handler and hasattr(self._langfuse_handler, 'langfuse'):
-                    langfuse_obj = getattr(self._langfuse_handler, 'langfuse')
-                    if langfuse_obj and hasattr(langfuse_obj, 'generation'):
-                        pass
-            except Exception:
-                pass
-
-        except Exception:
-            pass
 
     def on_chain_end(
         self,

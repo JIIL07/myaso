@@ -14,13 +14,12 @@ from src.config.database_constants import (
     TABLE_PROMPTS,
     TABLE_SYSTEM,
 )
-from src.utils import get_supabase_client
+from src.utils.supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
-# Кэш для промптов (topic -> (prompt, timestamp))
 _PROMPT_CACHE: Dict[str, tuple[str, float]] = {}
-_PROMPT_CACHE_TTL = 600  # 10 минут в секундах
+_PROMPT_CACHE_TTL = 600
 
 
 async def get_prompt(topic: str, use_cache: bool = True) -> Optional[str]:
@@ -35,12 +34,10 @@ async def get_prompt(topic: str, use_cache: bool = True) -> Optional[str]:
     """
     current_time = time.time()
     
-    # Проверяем кэш
     if use_cache and topic in _PROMPT_CACHE:
         cached_prompt, cache_time = _PROMPT_CACHE[topic]
         if current_time - cache_time < _PROMPT_CACHE_TTL:
             return cached_prompt
-        # Кэш устарел, удаляем
         del _PROMPT_CACHE[topic]
     
     try:
@@ -56,7 +53,6 @@ async def get_prompt(topic: str, use_cache: bool = True) -> Optional[str]:
         if result.data and len(result.data) > 0:
             row = result.data[0]
             prompt = row.get(COLUMN_PROMPT)
-            # Сохраняем в кэш
             if prompt:
                 _PROMPT_CACHE[topic] = (prompt, current_time)
             return prompt
@@ -107,7 +103,6 @@ async def get_all_instruction_prompts() -> Dict[str, str]:
     try:
         supabase = await get_supabase_client()
         
-        # Загружаем все промпты
         result = await supabase.table(TABLE_PROMPTS).select(
             f"{COLUMN_TOPIC}, {COLUMN_PROMPT}"
         ).execute()
@@ -120,14 +115,12 @@ async def get_all_instruction_prompts() -> Dict[str, str]:
             topic = row.get(COLUMN_TOPIC, "")
             prompt = row.get(COLUMN_PROMPT, "")
             
-            # Фильтруем инструкции по паттерну в названии
             if prompt and (
                 "Instruction" in topic or 
                 topic.startswith("Instruction:") or
                 "Instructions" in topic
             ):
                 instructions[topic] = prompt
-                # Сохраняем в кэш
                 current_time = time.time()
                 _PROMPT_CACHE[topic] = (prompt, current_time)
         

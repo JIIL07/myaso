@@ -59,3 +59,9 @@ class WhatsAppError(MyasoBaseException):
 
     pass
 
+
+class RuleNotFoundError(ConfigurationError):
+    """Ошибка при отсутствии правила в базе данных."""
+
+    pass
+

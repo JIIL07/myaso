@@ -6,8 +6,6 @@ from .product_tools import (
     get_product_by_title,
     find_similar_products,
     compare_products,
-    get_products_statistics,
-    get_recommendations_based_on_orders,
 )
 from .sql_tools import create_sql_tools
 from .client_tools import get_client_profile, get_client_orders, get_last_order
@@ -20,8 +18,6 @@ __all__ = [
     "get_product_by_title",
     "find_similar_products",
     "compare_products",
-    "get_products_statistics",
-    "get_recommendations_based_on_orders",
     "create_sql_tools",
     "get_client_profile",
     "get_client_orders",

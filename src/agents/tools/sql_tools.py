@@ -10,16 +10,17 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
-from src.config.constants import (
-    DANGEROUS_SQL_KEYWORDS,
-    DEFAULT_SQL_LIMIT,
-    TEXT_TO_SQL_TEMPERATURE,
+from src.utils.rules import (
+    get_rule_as_float,
+    get_rule_as_int,
+    get_rule_as_list,
+    get_rule_as_str,
 )
-from src.config.messages_constants import PROMPT_TOPIC_SQL_GENERATION_RULES
 from src.config.settings import settings
 from src.database import get_pool
 from src.database.queries.products_queries import get_products_by_sql_conditions
-from src.utils import records_to_json, validate_sql_conditions
+from src.utils.async_mixin import records_to_json
+from src.utils.validators import validate_sql_conditions
 from src.utils.prompts import (
     escape_prompt_variables,
     get_prompt,
@@ -115,9 +116,10 @@ async def _generate_sql_from_text_impl(
     if topic:
         db_prompt = await get_prompt(topic)
 
-    sql_rules_prompt = await get_prompt(PROMPT_TOPIC_SQL_GENERATION_RULES)
-    if not sql_rules_prompt:
-        logger.warning(f"[sql_tools] Промпт '{PROMPT_TOPIC_SQL_GENERATION_RULES}' не найден в БД, используем базовые правила")
+    try:
+        sql_rules_prompt = await get_rule_as_str("SQL_GENERATION_RULES")
+    except Exception:
+        sql_rules_prompt = None
 
     try:
         schema_context = await get_products_table_schema()
@@ -136,11 +138,16 @@ async def _generate_sql_from_text_impl(
     system_prompt = "\n\n".join(parts)
     system_prompt = escape_prompt_variables(system_prompt)
 
+    try:
+        text_to_sql_temperature = await get_rule_as_float("TEXT_TO_SQL_TEMPERATURE")
+    except Exception:
+        text_to_sql_temperature = 0.1
+    
     text2sql_llm = ChatOpenAI(
         model=settings.openrouter.model_id,
         openai_api_key=settings.openrouter.openrouter_api_key,
         openai_api_base=settings.openrouter.base_url,
-        temperature=TEXT_TO_SQL_TEMPERATURE,
+        temperature=text_to_sql_temperature,
     )
 
     prompt = ChatPromptTemplate.from_messages(
@@ -166,8 +173,13 @@ async def _generate_sql_from_text_impl(
     if not sql_query:
         raise ValueError("LLM вернул пустой SQL запрос")
 
+    try:
+        dangerous_keywords = await get_rule_as_list("DANGEROUS_SQL_KEYWORDS")
+    except Exception:
+        dangerous_keywords = ["DROP", "TRUNCATE", "DELETE", "INSERT", "EXECUTE", "EXEC", "UPDATE", "ALTER", "CREATE"]
+    
     sql_upper = sql_query.upper()
-    for keyword in DANGEROUS_SQL_KEYWORDS:
+    for keyword in dangerous_keywords:
         if re.search(rf"\b{re.escape(keyword)}\b", sql_upper):
             logger.error(
                 "Обнаружена опасная SQL команда: %s в запросе: %s",
@@ -179,7 +191,7 @@ async def _generate_sql_from_text_impl(
     sql_query = _replace_like_with_ilike(sql_query)
 
     if not sql_query.upper().strip().startswith("SELECT"):
-        validate_sql_conditions(sql_query)
+        await validate_sql_conditions(sql_query)
 
     return sql_query
 
@@ -246,7 +258,7 @@ def create_sql_tools():
     @tool(response_format="content_and_artifact")
     async def execute_sql_query(
         sql_query: str, 
-        limit: int = DEFAULT_SQL_LIMIT
+        limit: Optional[int] = None
     ) -> Tuple[str, List[int]]:
         """
         Универсальный инструмент для выполнения ЛЮБЫХ SQL SELECT запросов.
@@ -276,14 +288,24 @@ def create_sql_tools():
         if sql_query_clean.endswith(";"):
             sql_query_clean = sql_query_clean[:-1].strip()
 
-        # Заменяем LIKE на ILIKE для регистронезависимого поиска
         sql_query_clean = _replace_like_with_ilike(sql_query_clean)
+
+        try:
+            dangerous_keywords = await get_rule_as_list("DANGEROUS_SQL_KEYWORDS")
+        except Exception:
+            dangerous_keywords = ["DROP", "TRUNCATE", "DELETE", "INSERT", "EXECUTE", "EXEC", "UPDATE", "ALTER", "CREATE"]
 
         upper_sql = sql_query_clean.upper()
         
-        for keyword in DANGEROUS_SQL_KEYWORDS:
-            if re.search(rf"\b{keyword}\b", upper_sql):
+        for keyword in dangerous_keywords:
+            if re.search(rf"\b{re.escape(keyword)}\b", upper_sql):
                 return f"В запросе обнаружена запрещенная команда: {keyword}", []
+
+        if limit is None:
+            try:
+                limit = await get_rule_as_int("DEFAULT_SQL_LIMIT")
+            except Exception:
+                limit = 50
 
         is_full_query = upper_sql.startswith("SELECT")
         
@@ -313,7 +335,7 @@ def create_sql_tools():
             sql_conditions = sql_query_clean
 
             try:
-                validate_sql_conditions(sql_conditions)
+                await validate_sql_conditions(sql_conditions)
             except ValueError as e:
                 logger.error(f"SQL условия не прошли валидацию: {e}. Условия: {sql_conditions[:200]}")
                 return f"SQL условия не прошли валидацию: {e}", []

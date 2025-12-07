@@ -1,25 +1,24 @@
 """SQL запросы для работы с клиентами."""
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from src.models.entities import Client
-from src.utils import get_supabase_client
+from src.utils.supabase_client import get_supabase_client
 
 
-async def get_client_by_phone(phone: str) -> Optional[Client]:
+async def get_client_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     """Получает профиль клиента по номеру телефона.
 
     Args:
         phone: Номер телефона клиента
 
     Returns:
-        Модель Client или None если не найден
+        Словарь с данными клиента или None если не найден
     """
     try:
         supabase = await get_supabase_client()
         result = await supabase.table("clients").select("*").eq("phone", phone).execute()
         if result.data and len(result.data) > 0:
-            return Client(**result.data[0])
+            return result.data[0]
         return None
     except Exception as e:
         raise RuntimeError(f"Ошибка при получении клиента: {e}") from e
@@ -39,22 +38,22 @@ async def get_client_profile_text(phone: str) -> str:
         return "Профиль клиента не найден в базе данных."
 
     profile_parts = []
-    if profile.name:
-        profile_parts.append(f"Имя: {profile.name}")
-    if profile.phone:
-        profile_parts.append(f"Телефон: {profile.phone}")
-    if profile.city:
-        profile_parts.append(f"Город: {profile.city}")
-    if profile.business_area:
-        profile_parts.append(f"Бизнес-область: {profile.business_area}")
-    if profile.org_name:
-        profile_parts.append(f"Организация: {profile.org_name}")
-    if profile.is_it_friend:
+    if profile.get("name"):
+        profile_parts.append(f"Имя: {profile['name']}")
+    if profile.get("phone"):
+        profile_parts.append(f"Телефон: {profile['phone']}")
+    if profile.get("city"):
+        profile_parts.append(f"Город: {profile['city']}")
+    if profile.get("business_area"):
+        profile_parts.append(f"Бизнес-область: {profile['business_area']}")
+    if profile.get("org_name"):
+        profile_parts.append(f"Организация: {profile['org_name']}")
+    if profile.get("is_it_friend"):
         profile_parts.append("Статус: Друг компании")
-    if profile.mode:
-        profile_parts.append(f"Режим: {profile.mode}")
-    if profile.UTC is not None:
-        profile_parts.append(f"Часовой пояс: UTC{profile.UTC}")
+    if profile.get("mode"):
+        profile_parts.append(f"Режим: {profile['mode']}")
+    if profile.get("UTC") is not None:
+        profile_parts.append(f"Часовой пояс: UTC{profile['UTC']}")
 
     return (
         "\n".join(profile_parts)
@@ -76,7 +75,8 @@ async def get_client_is_friend(phone: str) -> bool:
     if not profile:
         return False
     
-    return bool(profile.is_it_friend)
+    is_friend = profile.get("is_it_friend")
+    return bool(is_friend)
 
 
 async def get_client_send_message(phone: str) -> bool:
@@ -91,7 +91,7 @@ async def get_client_send_message(phone: str) -> bool:
     """
     profile = await get_client_by_phone(phone)
     if not profile:
-        return True  # По умолчанию разрешено
+        return True
     
     send_message = profile.get("send_message")
     return bool(send_message) if send_message is not None else True

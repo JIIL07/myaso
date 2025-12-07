@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import tool
 
-from src.config.constants import CONTEXT_CACHE_TTL_SECONDS
+from src.utils.rules import get_rule_as_int
 from src.database.queries.context_queries import (
     get_agent_context_from_db,
     save_agent_context_to_db,
@@ -18,7 +18,6 @@ from src.agents.tools.context_vars import get_client_phone
 
 logger = logging.getLogger(__name__)
 
-# In-memory кэш для контекста
 _context_cache: Dict[str, tuple[Dict[str, Any], float]] = {}
 
 
@@ -33,44 +32,34 @@ async def get_agent_context_async(client_phone: str) -> Dict[str, Any]:
     """
     current_time = time.time()
     
-    # Проверяем кэш
+    try:
+        cache_ttl = await get_rule_as_int("CONTEXT_CACHE_TTL_SECONDS")
+    except Exception:
+        cache_ttl = 300
+    
     if client_phone in _context_cache:
         cached_context, cache_time = _context_cache[client_phone]
-        if current_time - cache_time < CONTEXT_CACHE_TTL_SECONDS:
+        if current_time - cache_time < cache_ttl:
             return cached_context
-        # Кэш устарел, удаляем
         del _context_cache[client_phone]
     
-    # Загружаем из БД
     try:
         context = await get_agent_context_from_db(client_phone)
-        # Если контекст пустой, создаем дефолтный
         if not context:
             context = {"require_photo": False}
             await save_agent_context_to_db(client_phone, context)
-        # Сохраняем в кэш
         _context_cache[client_phone] = (context, current_time)
         return context
     except Exception as e:
         logger.error(f"Ошибка при загрузке контекста для {client_phone}: {e}", exc_info=True)
-        # Возвращаем дефолтный контекст при ошибке
         return {"require_photo": False}
 
 
 def get_agent_context(client_phone: str) -> Dict[str, Any]:
-    """Получает контекст агента для клиента (синхронная обертка).
-
-    Args:
-        client_phone: Номер телефона клиента
-
-    Returns:
-        Словарь с контекстом агента
-    """
-    # Используем asyncio для синхронного вызова асинхронной функции
+    """Получает контекст агента для клиента (синхронная обертка)."""
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # Если событийный цикл уже запущен, создаем новый
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(
@@ -80,7 +69,6 @@ def get_agent_context(client_phone: str) -> Dict[str, Any]:
         else:
             return loop.run_until_complete(get_agent_context_async(client_phone))
     except RuntimeError:
-        # Если нет событийного цикла, создаем новый
         return asyncio.run(get_agent_context_async(client_phone))
 
 
@@ -93,7 +81,6 @@ async def _save_agent_context_async(client_phone: str, context_data: Dict[str, A
     """
     try:
         await save_agent_context_to_db(client_phone, context_data)
-        # Обновляем кэш
         _context_cache[client_phone] = (context_data, time.time())
     except Exception as e:
         logger.error(f"Ошибка при сохранении контекста для {client_phone}: {e}", exc_info=True)
@@ -153,17 +140,18 @@ def get_require_photo(client_phone: Optional[str] = None) -> bool:
 async def save_product_ids_to_context(client_phone: str, product_ids: List[int]) -> None:
     """Сохраняет список ID товаров в контекст агента для последующей отправки фотографий.
     
+    ВАЖНО: Перезаписывает предыдущие ID товаров новыми.
+    
     Args:
         client_phone: Номер телефона клиента
-        product_ids: Список ID товаров
+        product_ids: Список ID товаров (заменяет предыдущие ID)
     """
     try:
         context = await get_agent_context_async(client_phone)
         context["product_ids_for_photos"] = product_ids
         await _save_agent_context_async(client_phone, context)
-        logger.info(f"[save_product_ids_to_context] Сохранено {len(product_ids)} ID товаров для {client_phone}")
     except Exception as e:
-        logger.error(f"[save_product_ids_to_context] Ошибка сохранения product_ids: {e}", exc_info=True)
+        logger.error(f"[save_product_ids_to_context] Ошибка сохранения: {e}", exc_info=True)
 
 
 def get_product_ids_from_context(client_phone: Optional[str] = None) -> List[int]:
