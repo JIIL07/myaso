@@ -11,8 +11,6 @@ from .whatsapp_config import WhatsAppSettings
 __all__ = [
     "settings",
     "Settings",
-    "get_pool",
-    "close_pool",
     "LangChainSettings",
     "OpenRouterSettings",
     "AlibabaSettings",

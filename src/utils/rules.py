@@ -8,7 +8,6 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.config.database_constants import (
-    COLUMN_CATEGORY,
     COLUMN_RULE_NAME,
     COLUMN_RULE_TYPE,
     COLUMN_RULE_VALUE,
@@ -209,47 +208,6 @@ async def get_rule_as_str(rule_name: str) -> str:
     """
     value = await get_rule_value(rule_name)
     return str(value)
-
-
-async def get_all_rules_by_category(category: str) -> Dict[str, Any]:
-    """Получает все правила указанной категории.
-
-    Args:
-        category: Категория правил (например, 'agent', 'database', 'queue')
-
-    Returns:
-        Словарь {rule_name: rule_value} со всеми правилами категории
-    """
-    try:
-        supabase = await get_supabase_client()
-
-        result = (
-            await supabase.table(TABLE_RULES)
-            .select("*")
-            .eq(COLUMN_CATEGORY, category)
-            .execute()
-        )
-
-        if not result.data:
-            return {}
-
-        rules_dict = {}
-        current_time = time.time()
-
-        for row in result.data:
-            rule_name = row.get(COLUMN_RULE_NAME)
-            if rule_name:
-                _RULE_CACHE[rule_name] = (row.copy(), current_time)
-                try:
-                    rules_dict[rule_name] = await get_rule_value(rule_name)
-                except Exception as e:
-                    logger.warning(f"Не удалось получить значение правила '{rule_name}': {e}")
-                    rules_dict[rule_name] = row.get(COLUMN_RULE_VALUE)
-
-        return rules_dict
-    except Exception as e:
-        logger.error(f"Ошибка при получении правил категории '{category}': {e}")
-        return {}
 
 
 async def get_all_instruction_rules() -> Dict[str, str]:

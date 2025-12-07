@@ -43,15 +43,3 @@ async def get_supabase_client() -> AClient:
 
     return _supabase_client
 
-
-async def close_supabase_client() -> None:
-    """Закрывает Supabase клиент.
-
-    Должно вызываться при завершении приложения для корректного
-    закрытия соединения.
-    """
-    global _supabase_client
-
-    if _supabase_client is not None:
-        _supabase_client = None
-

@@ -93,27 +93,3 @@ def records_to_json(records: List[asyncpg.Record]) -> List[Dict[str, Any]]:
     return [dict(record) for record in records]
 
 
-def extract_product_titles_from_text(products_text: str) -> List[str]:
-    """Извлекает названия товаров из текста с информацией о товарах.
-
-    Парсит строки вида "Название: ..." из текста и возвращает список названий.
-
-    Args:
-        products_text: Текст с информацией о товарах
-
-    Returns:
-        Список названий товаров
-    """
-    if not products_text or "не найдены" in products_text.lower():
-        return []
-
-    titles = []
-    lines = products_text.split("\n")
-    for line in lines:
-        line = line.strip()
-        if line.startswith("Название:"):
-            title = line.replace("Название:", "").strip()
-            if title and title != "Не указано":
-                titles.append(title)
-
-    return titles

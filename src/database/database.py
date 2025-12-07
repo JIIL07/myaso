@@ -62,17 +62,3 @@ async def get_pool() -> asyncpg.Pool:
 
     return _pool
 
-
-async def close_pool() -> None:
-    """Закрывает connection pool.
-
-    Должно вызываться при завершении приложения для корректного
-    закрытия всех соединений.
-    """
-    global _pool
-
-    if _pool is not None:
-        await _pool.close()
-        _pool = None
-        logger.info("Connection pool закрыт")
-
