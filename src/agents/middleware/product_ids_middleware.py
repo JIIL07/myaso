@@ -25,6 +25,10 @@ PRODUCT_SEARCH_TOOLS = {
 def _extract_product_ids_from_result(result: Any) -> List[int]:
     """Извлекает product_ids из результата инструмента.
     
+    Поддерживает два формата:
+    1. Кортеж (content, artifact) от инструмента с response_format="content_and_artifact"
+    2. ToolMessage с атрибутом artifact (если LangChain автоматически создал ToolMessage)
+    
     Args:
         result: Результат выполнения инструмента (может быть кортежом (content, artifact) или ToolMessage)
         
@@ -34,19 +38,27 @@ def _extract_product_ids_from_result(result: Any) -> List[int]:
     product_ids = []
     
     try:
+        # Проверяем, является ли результат ToolMessage с artifact
+        if hasattr(result, 'artifact'):
+            artifact = result.artifact
         # Если результат - кортеж (content, artifact) от инструмента с response_format="content_and_artifact"
-        if isinstance(result, tuple) and len(result) == 2:
+        elif isinstance(result, tuple) and len(result) == 2:
             _, artifact = result
-            if isinstance(artifact, list):
-                for item in artifact:
-                    if isinstance(item, (int, str)):
-                        product_id = int(item)
-                        if product_id > 0:
-                            product_ids.append(product_id)
-            elif isinstance(artifact, (int, str)):
-                product_id = int(artifact)
-                if product_id > 0:
-                    product_ids.append(product_id)
+        else:
+            # Не поддерживаемый формат
+            return product_ids
+        
+        # Извлекаем product_ids из artifact
+        if isinstance(artifact, list):
+            for item in artifact:
+                if isinstance(item, (int, str)):
+                    product_id = int(item)
+                    if product_id > 0:
+                        product_ids.append(product_id)
+        elif isinstance(artifact, (int, str)):
+            product_id = int(artifact)
+            if product_id > 0:
+                product_ids.append(product_id)
     except (ValueError, TypeError) as e:
         logger.debug(
             f"[product_ids_middleware] Ошибка извлечения product_ids из результата: {e}"
@@ -71,14 +83,16 @@ async def save_product_ids_middleware(request: Any, handler: Any) -> Any:
         Результат выполнения инструмента (без изменений)
     """
     # Выполняем инструмент
-    if isinstance(handler, Awaitable):
-        result = await handler
-    elif callable(handler):
+    # Согласно документации LangChain, handler всегда callable
+    # и может возвращать как синхронный, так и асинхронный результат
+    if callable(handler):
         result = handler(request)
+        # Если результат асинхронный, ожидаем его
         if isinstance(result, Awaitable):
             result = await result
     else:
-        result = handler
+        # Fallback для случая, если handler не callable (не должно происходить)
+        result = await handler if isinstance(handler, Awaitable) else handler
     
     # Получаем имя инструмента из request
     tool_name = None

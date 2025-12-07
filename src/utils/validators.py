@@ -31,7 +31,6 @@ async def validate_sql_conditions(sql_conditions: str) -> None:
 
     sql_upper = sql_conditions.upper()
 
-    # Загружаем список опасных SQL ключевых слов из БД
     try:
         dangerous_keywords = await get_rule_as_list("DANGEROUS_SQL_KEYWORDS")
     except Exception as e:

@@ -43,11 +43,21 @@ async def get_pool() -> asyncpg.Pool:
                 min_size = await get_rule_as_int("DB_POOL_MIN_SIZE")
                 max_size = await get_rule_as_int("DB_POOL_MAX_SIZE")
                 command_timeout = await get_rule_as_float("DB_COMMAND_TIMEOUT")
+                logger.info(
+                    f"[database] Настройки пула загружены из БД: "
+                    f"min_size={min_size}, max_size={max_size}, command_timeout={command_timeout}"
+                )
             except Exception as e:
-                logger.warning(f"[database] Не удалось загрузить настройки пула из БД, используем значения по умолчанию: {e}")
+                logger.warning(
+                    f"[database] Не удалось загрузить настройки пула из БД, используем значения по умолчанию: {e}"
+                )
                 min_size = 5
                 max_size = 20
                 command_timeout = 30.0
+                logger.info(
+                    f"[database] Используются настройки по умолчанию: "
+                    f"min_size={min_size}, max_size={max_size}, command_timeout={command_timeout}"
+                )
             
             _pool = await asyncpg.create_pool(
                 dsn=db_dsn,
@@ -55,10 +65,31 @@ async def get_pool() -> asyncpg.Pool:
                 max_size=max_size,
                 command_timeout=command_timeout,
             )
-            logger.info("Connection pool создан успешно")
+            logger.info(
+                f"[database] Connection pool создан успешно: "
+                f"min_size={min_size}, max_size={max_size}, command_timeout={command_timeout}"
+            )
         except Exception as e:
             logger.error(f"Ошибка при создании connection pool: {e}", exc_info=True)
             raise RuntimeError(f"Не удалось создать connection pool: {e}") from e
 
     return _pool
+
+
+async def close_pool() -> None:
+    """Закрывает connection pool при shutdown.
+
+    Должно вызываться при завершении приложения для корректного
+    закрытия всех соединений с базой данных.
+    """
+    global _pool
+
+    if _pool is not None:
+        try:
+            await _pool.close()
+            logger.info("Connection pool закрыт")
+        except Exception as e:
+            logger.error(f"Ошибка при закрытии connection pool: {e}", exc_info=True)
+        finally:
+            _pool = None
 

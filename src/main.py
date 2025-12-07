@@ -42,6 +42,14 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         logger.info("[main] Воркер очереди остановлен")
+    
+    # Закрываем connection pool
+    try:
+        from src.database import close_pool
+        await close_pool()
+        logger.info("[main] Connection pool закрыт")
+    except Exception as e:
+        logger.error(f"[main] Ошибка при закрытии connection pool: {e}", exc_info=True)
 
 
 app = FastAPI(lifespan=lifespan)

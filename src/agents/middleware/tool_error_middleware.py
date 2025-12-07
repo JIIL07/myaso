@@ -23,14 +23,16 @@ async def handle_tool_errors(request: Any, handler: Any) -> Any:
         Результат выполнения инструмента или ToolMessage с ошибкой
     """
     try:
-        if isinstance(handler, Awaitable):
-            result = await handler
-        elif callable(handler):
+        # Согласно документации LangChain, handler всегда callable
+        # и может возвращать как синхронный, так и асинхронный результат
+        if callable(handler):
             result = handler(request)
+            # Если результат асинхронный, ожидаем его
             if isinstance(result, Awaitable):
                 result = await result
         else:
-            result = handler
+            # Fallback для случая, если handler не callable (не должно происходить)
+            result = await handler if isinstance(handler, Awaitable) else handler
         
         return result
     except Exception as e:

@@ -11,6 +11,12 @@ MAX_SQL_LIMIT = 100
 DEFAULT_TEMPERATURE = 0.5
 TEXT_TO_SQL_TEMPERATURE = 0.1
 
+# ВАЖНО: Эти значения используются только как fallback, если не заданы в БД через rules
+# Рекомендуется настроить их в БД для гибкости без перезапуска приложения
+# MAX_AGENT_ITERATIONS = 1000 - очень высокий лимит, может привести к долгим выполнениям
+# MAX_AGENT_EXECUTION_TIME = 3600 (1 час) - слишком долго для HTTP запроса
+# Рекомендуемые значения для продакшена: 50 итераций, 120 секунд
+# Убедитесь, что на уровне nginx/load balancer нет более коротких таймаутов
 MAX_AGENT_ITERATIONS = 1000
 MAX_AGENT_EXECUTION_TIME = 3600
 AGENT_RECURSION_LIMIT = MAX_AGENT_ITERATIONS + 5 

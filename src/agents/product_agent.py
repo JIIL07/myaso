@@ -9,11 +9,17 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-from langchain.agents import create_agent
-from langchain.agents.middleware import ModelCallLimitMiddleware
+from langchain.agents import AgentState, create_agent
+from langchain.agents.middleware import (
+    ModelCallLimitMiddleware,
+    ModelRetryMiddleware,
+    ToolRetryMiddleware,
+)
+from typing_extensions import NotRequired
 
 from src.agents.middleware.tool_error_middleware import handle_tool_errors
 from src.agents.middleware.product_ids_middleware import save_product_ids_middleware
@@ -57,6 +63,25 @@ from .tools.sql_tools import create_sql_tools
 from .tools.context_vars import client_phone_context
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ProductAgentContext:
+    """Контекст для ProductAgent.
+    
+    Содержит статическую информацию, которая не меняется во время выполнения агента.
+    """
+    client_phone: str
+
+
+class ProductAgentState(AgentState):
+    """Состояние ProductAgent.
+    
+    Расширяет базовое AgentState дополнительными полями для отслеживания
+    состояния агента во время выполнения.
+    """
+    product_ids: NotRequired[List[int]]
+    require_photo: NotRequired[bool]
 
 
 class ProductAgent(BaseAgent):
@@ -188,7 +213,63 @@ class ProductAgent(BaseAgent):
         
         max_iterations = max(1, min(10000, max_iterations))
 
-        middleware = [handle_tool_errors, save_product_ids_middleware]
+        # Загружаем настройки retry для инструментов из БД
+        try:
+            tool_retry_max_retries = await get_rule_as_int("TOOL_RETRY_MAX_RETRIES")
+            tool_retry_max_retries = max(0, min(5, tool_retry_max_retries))
+        except Exception:
+            tool_retry_max_retries = 3
+        
+        try:
+            tool_retry_backoff_factor = await get_rule_as_float("TOOL_RETRY_BACKOFF_FACTOR")
+            tool_retry_backoff_factor = max(1.0, min(5.0, tool_retry_backoff_factor))
+        except Exception:
+            tool_retry_backoff_factor = 2.0
+        
+        try:
+            tool_retry_initial_delay = await get_rule_as_float("TOOL_RETRY_INITIAL_DELAY")
+            tool_retry_initial_delay = max(0.1, min(10.0, tool_retry_initial_delay))
+        except Exception:
+            tool_retry_initial_delay = 1.0
+
+        try:
+            model_retry_max_retries = await get_rule_as_int("MODEL_RETRY_MAX_RETRIES")
+            model_retry_max_retries = max(0, min(5, model_retry_max_retries))
+        except Exception:
+            model_retry_max_retries = 2
+        
+        try:
+            model_retry_backoff_factor = await get_rule_as_float("MODEL_RETRY_BACKOFF_FACTOR")
+            model_retry_backoff_factor = max(1.0, min(5.0, model_retry_backoff_factor))
+        except Exception:
+            model_retry_backoff_factor = 2.0
+        
+        try:
+            model_retry_initial_delay = await get_rule_as_float("MODEL_RETRY_INITIAL_DELAY")
+            model_retry_initial_delay = max(0.1, min(10.0, model_retry_initial_delay))
+        except Exception:
+            model_retry_initial_delay = 1.0
+
+        middleware = [
+            ModelRetryMiddleware(
+                max_retries=model_retry_max_retries,
+                backoff_factor=model_retry_backoff_factor,
+                initial_delay=model_retry_initial_delay,
+                retry_on=(ConnectionError, TimeoutError, asyncio.TimeoutError),
+                on_failure="error",
+            ),
+            handle_tool_errors,
+            save_product_ids_middleware,
+            ToolRetryMiddleware(
+                max_retries=tool_retry_max_retries,
+                backoff_factor=tool_retry_backoff_factor,
+                initial_delay=tool_retry_initial_delay,
+                max_delay=60.0,
+                jitter=True,
+                retry_on=(ConnectionError, TimeoutError, asyncio.TimeoutError),
+                on_failure="return_message",
+            ),
+        ]
         if max_iterations > 0:
             middleware.append(
                 ModelCallLimitMiddleware(
@@ -202,6 +283,8 @@ class ProductAgent(BaseAgent):
             tools=agent_tools,
             system_prompt=system_prompt,
             middleware=middleware if middleware else None,
+            state_schema=ProductAgentState,
+            context_schema=ProductAgentContext,
         )
 
         return agent
@@ -327,7 +410,12 @@ class ProductAgent(BaseAgent):
         agent_tools: List[Any],
         config: RunnableConfig,
     ) -> Dict[str, Any]:
-        """Выполняет агента с заданными сообщениями и инструментами с retry и валидацией.
+        """Выполняет агента с заданными сообщениями и инструментами с timeout и валидацией.
+
+        Примечание: 
+        - Retry для вызовов модели обрабатывается через ModelRetryMiddleware
+        - Retry для инструментов обрабатывается через ToolRetryMiddleware
+        - Этот метод обрабатывает только timeout и финальные ошибки выполнения агента
 
         Args:
             messages: Список сообщений для агента
@@ -342,8 +430,6 @@ class ProductAgent(BaseAgent):
             AgentTimeoutError: Если агент превысил время выполнения
             AgentExecutionError: Если произошла ошибка при выполнении агента после всех попыток
         """
-        from src.utils.retry_utils import retry_async
-        
         agent = await self._get_agent(tools=agent_tools)
         
         try:
@@ -353,26 +439,16 @@ class ProductAgent(BaseAgent):
             max_execution_time = 3600
             logger.warning("[ProductAgent._execute_agent] Не удалось загрузить MAX_AGENT_EXECUTION_TIME, используем 3600")
         
-        async def _invoke_agent():
+        # Выполняем агента с timeout
+        # Retry для вызовов модели обрабатывается через ModelRetryMiddleware в middleware
+        try:
             if max_execution_time > 0:
-                return await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     agent.ainvoke({"messages": messages}, config=config),
                     timeout=max_execution_time,
                 )
             else:
-                return await agent.ainvoke({"messages": messages}, config=config)
-        
-        try:
-            result = await retry_async(
-                _invoke_agent,
-                max_attempts=3,
-                delay=1.0,
-                backoff=2.0,
-                exceptions=(asyncio.TimeoutError, Exception),
-                on_retry=lambda attempt, e: logger.warning(
-                    f"[ProductAgent._execute_agent] Попытка {attempt} не удалась: {e}"
-                ),
-            )
+                result = await agent.ainvoke({"messages": messages}, config=config)
             return result
         except asyncio.TimeoutError as e:
             from src.utils.exceptions import AgentTimeoutError
@@ -381,7 +457,7 @@ class ProductAgent(BaseAgent):
             raise AgentTimeoutError(error_msg, {"timeout": max_execution_time}) from e
         except Exception as e:
             from src.utils.exceptions import AgentExecutionError
-            error_msg = f"Ошибка при выполнении агента после всех попыток: {str(e)}"
+            error_msg = f"Ошибка при выполнении агента: {str(e)}"
             logger.error(f"[ProductAgent._execute_agent] Ошибка агента: {error_msg}", exc_info=True)
             raise AgentExecutionError(error_msg, {"original_error": str(e)}) from e
 
@@ -605,6 +681,16 @@ class ProductAgent(BaseAgent):
         """
         if not product_ids:
             return []
+        
+        # Лимит на количество ID для валидации (защита от слишком больших списков)
+        MAX_VALIDATION_IDS = 1000
+        if len(product_ids) > MAX_VALIDATION_IDS:
+            logger.warning(
+                f"[ProductAgent._validate_product_ids] "
+                f"Список product_ids слишком большой ({len(product_ids)} > {MAX_VALIDATION_IDS}), "
+                f"валидируем только первые {MAX_VALIDATION_IDS}"
+            )
+            product_ids = product_ids[:MAX_VALIDATION_IDS]
         
         try:
             from src.utils.supabase_client import get_supabase_client
