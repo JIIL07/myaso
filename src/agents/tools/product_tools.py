@@ -54,6 +54,10 @@ async def vector_search(query: str, k: int = 10, require_photo: bool = False) ->
     retriever = SupabaseVectorRetriever()
     k = min(k, 50)
 
+    # Если require_photo=False, используем значение из контекста агента
+    if not require_photo:
+        require_photo = get_require_photo()
+
     try:
         search_k = 250 if require_photo else k
         documents = await retriever.get_relevant_documents(query, k=search_k)

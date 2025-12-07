@@ -16,6 +16,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import ModelCallLimitMiddleware
 
 from src.agents.middleware.tool_error_middleware import handle_tool_errors
+from src.agents.middleware.product_ids_middleware import save_product_ids_middleware
 from langchain_core.callbacks.stdout import StdOutCallbackHandler
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -187,7 +188,7 @@ class ProductAgent(BaseAgent):
         
         max_iterations = max(1, min(10000, max_iterations))
 
-        middleware = [handle_tool_errors]
+        middleware = [handle_tool_errors, save_product_ids_middleware]
         if max_iterations > 0:
             middleware.append(
                 ModelCallLimitMiddleware(
@@ -400,14 +401,208 @@ class ProductAgent(BaseAgent):
         if not response:
             return response
         
+        # Очищаем форматирование ответа (убираем лишние пробелы и переносы строк)
         import re
-        response = re.sub(r'\[PRODUCT_IDS\].*?\[/PRODUCT_IDS\]', '', response, flags=re.DOTALL)
         response = re.sub(r'\n{3,}', '\n\n', response)
         response = re.sub(r' {2,}', ' ', response)
         return response.strip()
 
+    async def _extract_and_save_product_ids(
+        self, 
+        result: Dict[str, Any], 
+        client_phone: str
+    ) -> None:
+        """Извлекает product_ids из artifacts инструментов поиска и сохраняет в контекст.
+        
+        Использует лучшие практики LangChain для работы с artifacts:
+        - Инструменты с response_format="content_and_artifact" автоматически сохраняют
+          второй элемент кортежа в ToolMessage.artifact
+        - Artifact может быть списком или одиночным значением
+        
+        Args:
+            result: Результат выполнения агента (содержит messages)
+            client_phone: Номер телефона клиента для сохранения контекста
+        """
+        messages_result = result.get("messages", [])
+        if not messages_result:
+            return
+        
+        # Инструменты поиска товаров, которые возвращают product_ids как artifacts
+        PRODUCT_SEARCH_TOOLS = {
+            'vector_search',
+            'execute_sql_query',
+            'get_random_products',
+            'find_similar_products',
+            'get_product_by_title',
+        }
+        
+        all_product_ids = []
+        tool_messages = [msg for msg in messages_result if isinstance(msg, ToolMessage)]
+        
+        # Создаем словарь для быстрого поиска имени инструмента по tool_call_id
+        tool_call_id_to_name = {}
+        for msg in messages_result:
+            if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+                for tool_call in msg.tool_calls:
+                    tool_call_id = None
+                    tool_name = None
+                    
+                    # Обрабатываем разные форматы tool_call
+                    if isinstance(tool_call, dict):
+                        tool_call_id = tool_call.get('id')
+                        tool_name = tool_call.get('name')
+                    elif hasattr(tool_call, 'id'):
+                        tool_call_id = tool_call.id
+                        tool_name = getattr(tool_call, 'name', None)
+                    
+                    if tool_call_id and tool_name:
+                        tool_call_id_to_name[tool_call_id] = tool_name
+        
+        for tool_msg in tool_messages:
+            # Получаем имя инструмента через tool_call_id
+            tool_name = None
+            tool_call_id = None
+            
+            if hasattr(tool_msg, 'tool_call_id'):
+                tool_call_id = tool_msg.tool_call_id
+                tool_name = tool_call_id_to_name.get(tool_call_id)
+                
+                if not tool_name:
+                    logger.debug(
+                        f"[ProductAgent._extract_and_save_product_ids] "
+                        f"Не найдено имя инструмента для tool_call_id: {tool_call_id}"
+                    )
+            
+            # Fallback: пытаемся получить имя из атрибутов сообщения (обычно не работает для ToolMessage)
+            if not tool_name and hasattr(tool_msg, 'name'):
+                tool_name = tool_msg.name
+                logger.debug(
+                    f"[ProductAgent._extract_and_save_product_ids] "
+                    f"Получено имя инструмента из атрибута name: {tool_name}"
+                )
+            
+            if not tool_name:
+                logger.debug(
+                    f"[ProductAgent._extract_and_save_product_ids] "
+                    f"Не удалось определить имя инструмента для ToolMessage с tool_call_id: {tool_call_id}"
+                )
+                continue
+            
+            if tool_name not in PRODUCT_SEARCH_TOOLS:
+                logger.debug(
+                    f"[ProductAgent._extract_and_save_product_ids] "
+                    f"Инструмент {tool_name} не является инструментом поиска товаров, пропускаем"
+                )
+                continue
+            
+            # Извлекаем artifact из ToolMessage
+            # В LangChain artifact хранится в атрибуте artifact
+            artifact = None
+            if hasattr(tool_msg, 'artifact'):
+                artifact = tool_msg.artifact
+            elif hasattr(tool_msg, 'additional_kwargs') and 'artifact' in tool_msg.additional_kwargs:
+                artifact = tool_msg.additional_kwargs['artifact']
+            
+            if artifact is None:
+                logger.debug(
+                    f"[ProductAgent._extract_and_save_product_ids] "
+                    f"Инструмент {tool_name} не вернул artifact"
+                )
+                continue
+            
+            # Обрабатываем artifact (может быть списком или одиночным значением)
+            try:
+                if isinstance(artifact, list):
+                    # Если artifact - список, извлекаем все ID
+                    for item in artifact:
+                        if isinstance(item, (int, str)):
+                            product_id = int(item)
+                            if product_id > 0:
+                                all_product_ids.append(product_id)
+                        elif isinstance(item, dict) and 'id' in item:
+                            # Если элемент - словарь с ключом 'id'
+                            product_id = int(item['id'])
+                            if product_id > 0:
+                                all_product_ids.append(product_id)
+                elif isinstance(artifact, (int, str)):
+                    # Если artifact - одиночное значение
+                    product_id = int(artifact)
+                    if product_id > 0:
+                        all_product_ids.append(product_id)
+                elif isinstance(artifact, dict):
+                    # Если artifact - словарь, пытаемся извлечь ID
+                    if 'id' in artifact:
+                        product_id = int(artifact['id'])
+                        if product_id > 0:
+                            all_product_ids.append(product_id)
+                    elif 'product_ids' in artifact:
+                        # Если artifact содержит список product_ids
+                        ids_list = artifact['product_ids']
+                        if isinstance(ids_list, list):
+                            for item in ids_list:
+                                product_id = int(item)
+                                if product_id > 0:
+                                    all_product_ids.append(product_id)
+                
+                logger.debug(
+                    f"[ProductAgent._extract_and_save_product_ids] "
+                    f"Извлечено {len(all_product_ids)} product_ids из инструмента {tool_name}"
+                )
+            except (ValueError, TypeError) as e:
+                logger.warning(
+                    f"[ProductAgent._extract_and_save_product_ids] "
+                    f"Ошибка извлечения product_ids из artifact инструмента {tool_name}: {e}. "
+                    f"Artifact type: {type(artifact)}, value: {artifact}"
+                )
+                continue
+        
+        # Сохраняем найденные product_ids в контекст
+        if all_product_ids:
+            try:
+                # Удаляем дубликаты, сохраняя порядок
+                unique_ids = list(dict.fromkeys(all_product_ids))
+                logger.info(
+                    f"[ProductAgent._extract_and_save_product_ids] "
+                    f"Найдено {len(unique_ids)} уникальных product_ids для {client_phone}"
+                )
+                
+                # Валидируем ID товаров (проверяем существование в БД)
+                validated_ids = await self._validate_product_ids(unique_ids)
+                
+                if validated_ids:
+                    await save_product_ids_to_context(client_phone, validated_ids)
+                    logger.info(
+                        f"[ProductAgent._extract_and_save_product_ids] "
+                        f"Сохранено {len(validated_ids)} валидных product_ids в контекст для {client_phone}"
+                    )
+                    
+                    invalid_ids = set(unique_ids) - set(validated_ids)
+                    if invalid_ids:
+                        logger.warning(
+                            f"[ProductAgent._extract_and_save_product_ids] "
+                            f"Пропущены несуществующие product_ids: {sorted(invalid_ids)}"
+                        )
+                else:
+                    logger.warning(
+                        f"[ProductAgent._extract_and_save_product_ids] "
+                        f"Не найдено валидных product_ids для {client_phone}"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"[ProductAgent._extract_and_save_product_ids] "
+                    f"Ошибка сохранения product_ids для {client_phone}: {e}",
+                    exc_info=True
+                )
+
     async def _validate_product_ids(self, product_ids: List[int]) -> List[int]:
-        """Валидирует список ID товаров, проверяя их существование в БД."""
+        """Валидирует список ID товаров, проверяя их существование в БД.
+        
+        Args:
+            product_ids: Список ID товаров для валидации
+            
+        Returns:
+            Список валидных ID товаров, существующих в БД
+        """
         if not product_ids:
             return []
         
@@ -430,12 +625,18 @@ class ProductAgent(BaseAgent):
                     
                     if result.data:
                         validated_ids.extend(row["id"] for row in result.data if row.get("id"))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"[ProductAgent._validate_product_ids] "
+                        f"Ошибка валидации батча {i}-{i+batch_size}: {e}"
+                    )
             
             return validated_ids
         except Exception as e:
-            logger.error(f"[ProductAgent._validate_product_ids] Ошибка валидации: {e}", exc_info=True)
+            logger.error(
+                f"[ProductAgent._validate_product_ids] Ошибка валидации: {e}",
+                exc_info=True
+            )
             return []
 
     def _extract_response(self, result: Dict[str, Any]) -> str:
@@ -635,50 +836,10 @@ class ProductAgent(BaseAgent):
 
             response_text = self._extract_response(result)
 
-            messages_result = result.get("messages", [])
-            if messages_result:
-                tool_messages = [msg for msg in messages_result if isinstance(msg, ToolMessage)]
-                steps_count = len(tool_messages) if tool_messages else 0
-                
-                PRODUCT_SEARCH_TOOLS = {
-                    'vector_search',
-                    'execute_sql_query',
-                    'get_random_products',
-                    'find_similar_products',
-                }
-                
-                all_product_ids = []
-                
-                for tool_msg in tool_messages:
-                    tool_name = getattr(tool_msg, 'name', 'unknown')
-                    if tool_name not in PRODUCT_SEARCH_TOOLS:
-                        continue
-                    
-                    artifact = getattr(tool_msg, 'artifact', None)
-                    if artifact:
-                        for item in (artifact if isinstance(artifact, list) else [artifact]):
-                            try:
-                                all_product_ids.append(int(item))
-                            except (ValueError, TypeError):
-                                pass
-                
-                if all_product_ids:
-                    try:
-                        unique_ids = list(dict.fromkeys(all_product_ids))
-                        validated_ids = await self._validate_product_ids(unique_ids)
-                        if validated_ids:
-                            await save_product_ids_to_context(client_phone, validated_ids)
-                            invalid_ids = set(unique_ids) - set(validated_ids)
-                            if invalid_ids:
-                                logger.warning(f"[ProductAgent.run] Пропущены несуществующие product_ids: {sorted(invalid_ids)}")
-                    except Exception as e:
-                        logger.error(f"[ProductAgent.run] Ошибка сохранения product_ids: {e}", exc_info=True)
-
-                if steps_count == 0:
-                    logger.warning(
-                        f"[ProductAgent.run] Нет вызовов инструментов для {client_phone}, "
-                        f"user_input='{user_input[:200]}'"
-                    )
+            # Извлекаем product_ids из artifacts инструментов поиска товаров
+            # Примечание: product_ids уже должны быть сохранены через middleware во время выполнения,
+            # но оставляем этот вызов как fallback на случай, если middleware не сработал
+            await self._extract_and_save_product_ids(result, client_phone)
 
             await self._save_to_memory(user_input, response_text, chat_history, client_phone)
 
