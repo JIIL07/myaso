@@ -1,5 +1,4 @@
 """Модуль для переформулировки запросов на основе истории разговора."""
-
 from __future__ import annotations
 
 import logging
@@ -8,8 +7,8 @@ from typing import Any, Dict, List
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
-from src.utils.rules import get_rule_as_bool, get_rule_as_int
 from src.config.settings import settings
+from src.utils.retrievers.constants import ENABLE_QUERY_REWRITING, MAX_HISTORY_FOR_REWRITING
 
 logger = logging.getLogger(__name__)
 
@@ -29,21 +28,11 @@ async def rewrite_query_with_context(
     Returns:
         Переформулированный запрос
     """
-    try:
-        enable_rewriting = await get_rule_as_bool("ENABLE_QUERY_REWRITING")
-    except Exception as e:
-        logger.warning(f"[query_rewriter] Не удалось загрузить ENABLE_QUERY_REWRITING из БД, используем False: {e}")
-        enable_rewriting = False
-    
-    if not enable_rewriting:
+    if not ENABLE_QUERY_REWRITING:
         return query
 
     try:
-        try:
-            max_history = await get_rule_as_int("MAX_HISTORY_FOR_REWRITING")
-        except Exception as e:
-            logger.warning(f"[query_rewriter] Не удалось загрузить MAX_HISTORY_FOR_REWRITING из БД, используем 10: {e}")
-            max_history = 10
+        max_history = MAX_HISTORY_FOR_REWRITING
         
         recent_messages = chat_history[-max_history:] if chat_history else []
         

@@ -7,14 +7,11 @@ from typing import Any, Dict, List, Sequence
 import asyncpg
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
-from openai import OpenAI
+from openai import AsyncOpenAI
 
-from src.utils.rules import (
-    get_rule_as_float,
-    get_rule_as_int,
-)
+from src.services.database.database import get_pool
 from src.config.settings import settings
-from src.database import get_pool
+from src.utils.retrievers.constants import DEFAULT_VECTOR_SEARCH_K
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +37,7 @@ class SupabaseVectorRetriever(BaseRetriever):
             k: Количество документов для возврата (по умолчанию 10)
         """
         super().__init__()
-        self._embedder = OpenAI(
+        self._embedder = AsyncOpenAI(
             api_key=settings.alibaba.alibaba_key,
             base_url=settings.alibaba.base_alibaba_url,
         )
@@ -69,7 +66,7 @@ class SupabaseVectorRetriever(BaseRetriever):
         Raises:
             Exception: Если произошла ошибка при обращении к API embeddings
         """
-        completion = self._embedder.embeddings.create(
+        completion = await self._embedder.embeddings.create(
             model=self._embedding_model,
             input=text,
         )
@@ -105,11 +102,7 @@ class SupabaseVectorRetriever(BaseRetriever):
         """
         if k is None:
             if self._k is None:
-                try:
-                    k = await get_rule_as_int("DEFAULT_VECTOR_SEARCH_K")
-                except Exception as e:
-                    logger.warning(f"[vector_retrievers] Не удалось загрузить DEFAULT_VECTOR_SEARCH_K из БД, используем 10: {e}")
-                    k = 10
+                k = DEFAULT_VECTOR_SEARCH_K
             else:
                 k = self._k
         return await self._get_relevant_documents(query, k=k)

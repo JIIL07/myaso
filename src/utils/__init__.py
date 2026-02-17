@@ -1,23 +1,5 @@
-"""Utils package for myaso project."""
+"""Утилиты для работы с приложением."""
 
-from .async_mixin import (
-    AsyncMixin,
-    remove_markdown_symbols,
-    records_to_json,
-)
-from .logger import setup_logging
-from .phone_validator import normalize_phone, validate_phone, normalize_and_validate_phone
-from .validators import validate_sql_conditions
-from .supabase_client import get_supabase_client
+from src.utils.formatters.formatters import remove_markdown_symbols
 
-__all__ = [
-    "AsyncMixin",
-    "remove_markdown_symbols",
-    "records_to_json",
-    "setup_logging",
-    "normalize_phone",
-    "validate_phone",
-    "normalize_and_validate_phone",
-    "validate_sql_conditions",
-    "get_supabase_client",
-]
+__all__ = ["remove_markdown_symbols"]

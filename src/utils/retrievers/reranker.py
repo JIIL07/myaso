@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 
 from langchain_core.documents import Document
 
-from src.utils.rules import get_rule_as_bool
+from src.utils.retrievers.constants import ENABLE_RERANKING
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +27,7 @@ async def rerank_documents(
     Returns:
         Переранжированный список документов
     """
-    try:
-        enable_reranking = await get_rule_as_bool("ENABLE_RERANKING")
-    except Exception as e:
-        logger.warning(f"[reranker] Не удалось загрузить ENABLE_RERANKING из БД, используем False: {e}")
-        enable_reranking = False
-    
-    if not enable_reranking:
+    if not ENABLE_RERANKING:
         return documents
 
     try:

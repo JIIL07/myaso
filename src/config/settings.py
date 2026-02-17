@@ -1,24 +1,26 @@
-"""Основные настройки приложения.
+"""Централизованные настройки приложения."""
 
-Собирает все настройки из отдельных конфигурационных файлов.
-"""
+from dotenv import load_dotenv
 
-from pydantic import BaseModel
+from src.services.ai.config import AlibabaSettings, OpenRouterSettings
+from src.services.database.config import SupabaseSettings
+from src.services.langfuse.config import LangFuseConfig
+from src.services.telegram.config import TelegramSettings
+from src.services.whatsapp.config import WhatsAppSettings
 
-from .database_config import SupabaseSettings
-from .langfuse_config import LangFuseConfig
-from .llm_config import AlibabaSettings, OpenRouterSettings
-from .whatsapp_config import WhatsAppSettings
+load_dotenv()
 
 
-class Settings(BaseModel):
-    """Главный класс настроек, объединяющий все конфигурации."""
+class Settings:
+    """Централизованный объект настроек приложения."""
 
-    supabase: SupabaseSettings = SupabaseSettings()
-    openrouter: OpenRouterSettings = OpenRouterSettings()
-    alibaba: AlibabaSettings = AlibabaSettings()
-    whatsapp: WhatsAppSettings = WhatsAppSettings()
-    langfuse: LangFuseConfig = LangFuseConfig()
+    def __init__(self):
+        self.supabase = SupabaseSettings()
+        self.whatsapp = WhatsAppSettings()
+        self.telegram = TelegramSettings()
+        self.langfuse = LangFuseConfig()
+        self.openrouter = OpenRouterSettings()
+        self.alibaba = AlibabaSettings()
 
 
 settings = Settings()
