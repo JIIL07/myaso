@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Sequence
+from typing import Any, Sequence
 
 import asyncpg
 from langchain_core.documents import Document
@@ -11,17 +11,12 @@ from openai import AsyncOpenAI
 
 from src.services.database.database import get_pool
 from src.config.settings import settings
-from src.utils.retrievers.constants import DEFAULT_VECTOR_SEARCH_K
+from src.constants import DEFAULT_VECTOR_SEARCH_K
 
 logger = logging.getLogger(__name__)
 
 
 class SupabaseVectorRetriever(BaseRetriever):
-    """Ретривер для семантического поиска по товарам (pgvector).
-
-    Наследуется от BaseRetriever для лучшей интеграции с LangChain экосистемой.
-    """
-
     def __init__(
         self,
         *,
@@ -29,13 +24,6 @@ class SupabaseVectorRetriever(BaseRetriever):
         db_dsn: str | None = None,
         k: int | None = None,
     ) -> None:
-        """Инициализация ретривера.
-
-        Args:
-            embedding_model: модель эмбеддингов
-            db_dsn: DSN Postgres
-            k: Количество документов для возврата (по умолчанию 10)
-        """
         super().__init__()
         self._embedder = AsyncOpenAI(
             api_key=settings.alibaba.alibaba_key,
@@ -50,22 +38,7 @@ class SupabaseVectorRetriever(BaseRetriever):
 
         self._db_dsn = db_dsn or os.getenv("POSTGRES_DSN")
 
-    async def _embed(self, text: str) -> List[float]:
-        """Создаёт эмбеддинг текста используя Alibaba DashScope API.
-
-        Отправляет текст в модель embeddings и возвращает векторное представление
-        в виде списка чисел с плавающей точкой.
-
-        Args:
-            text: Текст для создания embedding
-
-        Returns:
-            Список float чисел, представляющий векторное представление текста.
-            Размерность вектора зависит от модели (для text-embedding-v4 это обычно 1536).
-
-        Raises:
-            Exception: Если произошла ошибка при обращении к API embeddings
-        """
+    async def _embed(self, text: str) -> list[float]:
         completion = await self._embedder.embeddings.create(
             model=self._embedding_model,
             input=text,
@@ -75,31 +48,12 @@ class SupabaseVectorRetriever(BaseRetriever):
 
     async def _aget_relevant_documents(
         self, query: str, *, run_manager: Any = None
-    ) -> List[Document]:
-        """Асинхронная версия get_relevant_documents (требуется BaseRetriever).
-
-        Args:
-            query: Текстовый запрос для поиска
-            run_manager: Менеджер выполнения (опционально)
-
-        Returns:
-            Список Document объектов с найденными товарами
-        """
+    ) -> list[Document]:
         return await self._get_relevant_documents(query, k=self._k)
 
     async def get_relevant_documents(
         self, query: str, k: int | None = None
-    ) -> List[Document]:
-        """Возвращает top-k документов по близости (LangChain Document).
-
-        Args:
-            query: Текстовый запрос для поиска
-            k: Количество документов для возврата (если None, используется значение из __init__).
-               Если k >= 100000, возвращаются все товары без ограничения.
-
-        Returns:
-            Список Document объектов с найденными товарами
-        """
+    ) -> list[Document]:
         if k is None:
             if self._k is None:
                 k = DEFAULT_VECTOR_SEARCH_K
@@ -107,13 +61,7 @@ class SupabaseVectorRetriever(BaseRetriever):
                 k = self._k
         return await self._get_relevant_documents(query, k=k)
 
-    async def _get_relevant_documents(self, query: str, k: int) -> List[Document]:
-        """Внутренняя реализация получения документов.
-        
-        Args:
-            query: Текстовый запрос для поиска
-            k: Количество документов для возврата. Если k >= 100000, возвращаются все товары.
-        """
+    async def _get_relevant_documents(self, query: str, k: int) -> list[Document]:
         vector = await self._embed(query)
 
         use_limit = k < 100000
@@ -164,12 +112,12 @@ class SupabaseVectorRetriever(BaseRetriever):
             error_str = str(e)
 
             logger.error(
-                f"Database connection error: {error_type}: {error_str}", exc_info=True
+                "Database connection error: %s: %s", error_type, error_str, exc_info=True
             )
 
             raise RuntimeError("Ошибка подключения к базе данных") from e
 
-        documents: List[Document] = []
+        documents: list[Document] = []
         for i, row in enumerate(rows):
             row_dict: dict[str, Any] = dict(row)
             content_parts = [

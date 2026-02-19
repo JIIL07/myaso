@@ -1,16 +1,18 @@
+from __future__ import annotations
+
 import logging
 import re
-from typing import Tuple
 
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
+
 class PhoneValidationError(ValueError):
     def __init__(self, phone: str, message: str = "Invalid phone number"):
         self.phone = phone
         self.message = message
-        super().__init__(f"{message}: {phone}")
+        super().__init__("%s: %s" % (message, phone))
 
 
 def normalize_phone(phone: str) -> str:
@@ -18,7 +20,7 @@ def normalize_phone(phone: str) -> str:
         return phone
 
     phone = phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-    
+
     if phone.startswith("8") and len(phone) > 1:
         phone = "+7" + phone[1:]
     elif phone.startswith("7") and len(phone) > 1 and not phone.startswith("+"):
@@ -34,25 +36,26 @@ def normalize_phone(phone: str) -> str:
 
 def validate_phone(phone: str) -> bool:
     if not phone:
-        logger.debug("Пустой номер телефона")
+        logger.debug("[PhoneValidator] Empty phone number")
         return False
 
     normalized = normalize_phone(phone)
-    
+
     pattern = r"^\+[1-9]\d{9,14}$"
     is_valid = bool(re.match(pattern, normalized))
-    
+
     if not is_valid:
-        logger.debug(f"Номер не прошел валидацию: {phone} -> {normalized} (длина: {len(normalized)})")
-    
+        logger.debug("[PhoneValidator] Invalid number: %s -> %s", phone, normalized)
+
     return is_valid
 
-def get_validated_phone(phone: str) -> Tuple[str, bool]:
+
+def get_validated_phone(phone: str) -> tuple[str, bool]:
     normalized = normalize_phone(phone)
     is_valid = validate_phone(normalized)
 
     if not is_valid:
-        logger.error(f"Невалидный номер телефона: {phone} -> {normalized}")
+        logger.error("[PhoneValidator] Invalid number: %s -> %s", phone, normalized)
         raise PhoneValidationError(phone)
 
     return normalized, is_valid
@@ -63,7 +66,7 @@ def validate_phone_dependency(phone: str) -> str:
         normalized_phone, _ = get_validated_phone(phone)
         return normalized_phone
     except PhoneValidationError as e:
-        logger.warning(f"Попытка использовать невалидный номер: {e.phone}")
+        logger.warning("[PhoneValidator] Invalid number: %s", e.phone)
         raise HTTPException(
             status_code=400,
             detail={
@@ -76,5 +79,3 @@ def validate_phone_dependency(phone: str) -> str:
 
 def validate_client_phone(client_phone: str | None) -> bool:
     return bool(client_phone and client_phone.strip())
-
-

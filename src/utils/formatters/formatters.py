@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 import re
-from typing import List, Dict, Any, Tuple
+from typing import Any
 
 import asyncpg
 
 def remove_markdown_symbols(text: str) -> str:
-    """Удаляет markdown символы из текста для отправки в Telegram."""
     text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
     text = re.sub(r"\*(.+?)\*", r"\1", text)
     text = re.sub(r"_(.+?)_", r"\1", text)
@@ -16,14 +17,12 @@ def remove_markdown_symbols(text: str) -> str:
     return text.strip()
 
 
-def records_to_json(records: List[asyncpg.Record]) -> List[Dict[str, Any]]:
-    """Конвертирует asyncpg.Record в список словарей (JSON-совместимый формат)."""
+def records_to_json(records: list[asyncpg.Record]) -> list[dict[str, Any]]:
     return [dict(record) for record in records]
 
 
 def normalize_field_value_sync(value, field_type: str = "text") -> str:
-    """Синхронная версия нормализации значения поля: если значение 0, NULL, или пустое, возвращает дефолтное значение."""
-    from src.services.ai.constants import DEFAULT_FIELD_VALUE
+    from src.constants import DEFAULT_FIELD_VALUE
     
     empty_values = ["не указано", "null", "none", ""]
 
@@ -58,16 +57,7 @@ def normalize_field_value_sync(value, field_type: str = "text") -> str:
         return DEFAULT_FIELD_VALUE
 
 
-async def format_product(product: Dict[str, Any], system_vars: Dict[str, str]) -> str:
-    """Форматирует один товар в читаемый текст.
-    
-    Args:
-        product: Словарь с данными товара
-        system_vars: Словарь системных переменных для расчета цены
-        
-    Returns:
-        Отформатированная строка с информацией о товаре
-    """
+async def format_product(product: dict[str, Any], system_vars: dict[str, str]) -> str:
     from src.utils.prices.price_calculator import calculate_final_price
     
     title = product.get("title", "Не указано")
@@ -90,16 +80,7 @@ async def format_product(product: Dict[str, Any], system_vars: Dict[str, str]) -
     return "\n".join(product_lines)
 
 
-async def format_products_list(products: List[Dict[str, Any]], system_vars: Dict[str, str]) -> Tuple[str, List[int]]:
-    """Форматирует список товаров и извлекает их ID.
-    
-    Args:
-        products: Список словарей с данными товаров
-        system_vars: Словарь системных переменных для расчета цены
-        
-    Returns:
-        Кортеж из отформатированного текста и списка ID товаров
-    """
+async def format_products_list(products: list[dict[str, Any]], system_vars: dict[str, str]) -> tuple[str, list[int]]:
     products_list = []
     product_ids = []
 
@@ -115,27 +96,11 @@ async def format_products_list(products: List[Dict[str, Any]], system_vars: Dict
     return result_text, product_ids
 
 
-def has_photo(product: Dict[str, Any]) -> bool:
-    """Проверяет наличие фотографии у товара.
-    
-    Args:
-        product: Словарь с данными товара
-        
-    Returns:
-        True если у товара есть фотография, False иначе
-    """
+def has_photo(product: dict[str, Any]) -> bool:
     photo = product.get("photo")
     return bool(photo and str(photo).strip())
 
 
-def filter_products_by_photo(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Фильтрует товары по наличию фотографий.
-    
-    Args:
-        products: Список словарей с данными товаров
-        
-    Returns:
-        Отфильтрованный список товаров с фотографиями
-    """
-    return [product for product in products if has_photo(product)]
+def filter_products_by_photo(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [p for p in products if has_photo(p)]
 

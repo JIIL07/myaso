@@ -21,7 +21,7 @@ def setup_rate_limiter(app) -> None:
     """
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    logger.info("Rate limiting настроен")
+    logger.info("[RateLimiter] Настроен")
 
 
 def get_rate_limit_key(request: Request) -> str:

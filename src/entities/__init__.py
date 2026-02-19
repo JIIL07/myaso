@@ -1,13 +1,10 @@
-"""Модели и типы для проекта."""
-
 from .product import Product
-
 from .requests import (
     InitConversationRequest,
     UserMessageRequest,
     ResetConversationRequest,
 )
-from .responses import ErrorResponse, SuccessResponse, TestResponse
+from .responses import ErrorResponse, SuccessResponse
 
 __all__ = [
     "Product",
@@ -16,5 +13,4 @@ __all__ = [
     "ResetConversationRequest",
     "ErrorResponse",
     "SuccessResponse",
-    "TestResponse",
 ]

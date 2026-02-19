@@ -1,7 +1,8 @@
-"""Сервис для получения статуса очереди и агента."""
+from __future__ import annotations
+
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Any
 
 from .queue_manager import QueueManager
 from .rate_limiter import RateLimiter
@@ -10,40 +11,18 @@ logger = logging.getLogger(__name__)
 
 
 class StatusService:
-    """Сервис для получения статуса очереди и агента."""
 
     def __init__(self, queue_manager: QueueManager, rate_limiter: RateLimiter):
-        """Инициализирует сервис статуса.
-
-        Args:
-            queue_manager: Менеджер очереди
-            rate_limiter: Rate limiter
-        """
         self.queue_manager = queue_manager
         self.rate_limiter = rate_limiter
-        self._current_processing_task: Optional[Dict[str, Any]] = None
-        self._processing_start_time: Optional[datetime] = None
+        self._current_processing_task: dict[str, Any] | None = None
+        self._processing_start_time: datetime | None = None
 
-    def set_current_task(self, task: Optional[Dict[str, Any]], start_time: Optional[datetime] = None) -> None:
-        """Устанавливает текущую обрабатываемую задачу.
-
-        Args:
-            task: Информация о задаче или None
-            start_time: Время начала обработки
-        """
+    def set_current_task(self, task: dict[str, Any] | None, start_time: datetime | None = None) -> None:
         self._current_processing_task = task
         self._processing_start_time = start_time or (datetime.now() if task else None)
 
-    def get_status(self) -> Dict[str, Any]:
-        """Возвращает статус очереди и агента.
-
-        Returns:
-            Словарь со статусом:
-            - agent_status: 'free' или 'busy'
-            - queue_size: количество задач в очереди
-            - queue_tasks: список задач в очереди
-            - current_task: текущая обрабатываемая задача (если есть)
-        """
+    def get_status(self) -> dict[str, Any]:
         rate_limiter_status = self.rate_limiter.get_status()
         agent_status = "free" if rate_limiter_status["available"] else "busy"
 

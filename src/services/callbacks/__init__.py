@@ -1,6 +1,19 @@
-"""Callbacks для LangChain."""
+from .langfuse_callback import (
+    CallbackHandler,
+    create_langfuse_callback_handler,
+    flush_langfuse,
+    is_langfuse_enabled,
+    observe,
+    propagate_attributes,
+    update_trace,
+)
 
-from .langfuse_callback import LangfuseHandler
-
-__all__ = ["LangfuseHandler"]
-
+__all__ = [
+    "CallbackHandler",
+    "create_langfuse_callback_handler",
+    "flush_langfuse",
+    "is_langfuse_enabled",
+    "observe",
+    "propagate_attributes",
+    "update_trace",
+]

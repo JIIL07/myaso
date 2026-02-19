@@ -3,7 +3,7 @@
 from typing import Optional
 
 from src.services.messaging.base import BaseMessagingService
-from src.services.whatsapp.constants import ERROR_MESSAGE_WHATSAPP_FAILED, HTTP_TIMEOUT_SECONDS
+from src.constants import ERROR_MESSAGE_WHATSAPP_FAILED, HTTP_TIMEOUT_SECONDS
 
 _whatsapp_service: Optional[BaseMessagingService] = None
 

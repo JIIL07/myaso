@@ -1,4 +1,3 @@
-"""Health check endpoints."""
 import logging
 
 import httpx
@@ -14,11 +13,6 @@ router = APIRouter()
 
 
 async def check_database() -> tuple[str, str]:
-    """Проверяет подключение к базе данных через connection pool.
-
-    Returns:
-        Кортеж (статус, сообщение): ("ok", "") или ("error", "описание ошибки")
-    """
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -26,35 +20,25 @@ async def check_database() -> tuple[str, str]:
         return "ok", ""
     except Exception as e:
         error_msg = str(e)
-        logger.warning(f"Database health check failed: {error_msg}")
+        logger.warning("[Health] Database check failed: %s", error_msg)
         return "error", error_msg
 
 
 async def check_queue() -> tuple[str, str]:
-    """Проверяет доступность очереди PGMQ.
-
-    Returns:
-        Кортеж (статус, сообщение): ("ok", "") или ("error", "описание ошибки")
-    """
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
-            result = await conn.fetchval(
+            await conn.fetchval(
                 "SELECT COUNT(*) FROM pgmq.q_delayed_messages LIMIT 1"
             )
             return "ok", ""
     except Exception as e:
         error_msg = str(e)
-        logger.warning(f"Queue health check failed: {error_msg}")
+        logger.warning("[Health] Queue check failed: %s", error_msg)
         return "error", error_msg
 
 
 async def check_telegram_api() -> tuple[str, str]:
-    """Проверяет доступность Telegram API.
-
-    Returns:
-        Кортеж (статус, сообщение): ("ok", ""), ("not_configured", "") или ("error", "описание ошибки")
-    """
     try:
         if not settings.telegram.telegram_api_base_url:
             return "not_configured", "Telegram API URL not configured"
@@ -63,21 +47,16 @@ async def check_telegram_api() -> tuple[str, str]:
             response = await client.head(settings.telegram.telegram_api_base_url)
             if response.status_code < 500:
                 return "ok", ""
-            else:
-                return "error", f"HTTP {response.status_code}"
+            return "error", "HTTP %s" % response.status_code
     except Exception as e:
         error_msg = str(e)
-        logger.warning(f"Telegram API health check failed: {error_msg}")
+        logger.warning("[Health] Telegram API check failed: %s", error_msg)
         return "error", error_msg
 
 
 @router.get("/health")
-async def health_check():
-    """Базовый health check (liveness probe).
-
-    Returns:
-        JSON с базовым статусом приложения
-    """
+@router.get("/health/live")
+async def liveness_check():
     return JSONResponse(
         content={"status": "healthy"},
         status_code=status.HTTP_200_OK,
@@ -86,15 +65,7 @@ async def health_check():
 
 @router.get("/health/ready")
 async def readiness_check():
-    """Проверка готовности (readiness probe).
-
-    Проверяет состояние всех зависимостей: БД, очереди, внешние API.
-
-    Returns:
-        JSON с результатами проверки каждого компонента
-        HTTP 200 если все компоненты здоровы, 503 если есть проблемы
-    """
-    checks = {}
+    checks: dict = {}
 
     db_status, db_message = await check_database()
     checks["database"] = {
@@ -119,7 +90,7 @@ async def readiness_check():
         checks[component]["status"] for component in critical_components
     ]
 
-    all_healthy = all(status == "ok" for status in critical_statuses)
+    all_healthy = all(s == "ok" for s in critical_statuses)
     overall_status = "ready" if all_healthy else "not_ready"
 
     status_code = (
@@ -133,4 +104,3 @@ async def readiness_check():
         },
         status_code=status_code,
     )
-

@@ -1,4 +1,5 @@
-from .langfuse import get_langfuse_label
+from src.config.settings import settings
 
-__all__ = ["get_langfuse_label"]
 
+def get_langfuse_label() -> str:
+    return settings.langfuse.langfuse_prompt_label or "production"

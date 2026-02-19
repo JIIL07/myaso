@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   app:
     build: .
@@ -15,7 +13,7 @@ services:
       - BASE_ALIBABA_URL=${BASE_ALIBABA_URL}
       - ALIBABA_KEY=${ALIBABA_KEY}
       - EMBEDDING_MODEL_ID=${EMBEDDING_MODEL_ID}
-      - BASE_URL=${BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
+      - BASE_URL=${BASE_URL}
       - MODEL_ID=${MODEL_ID}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
@@ -31,8 +29,8 @@ services:
       - ./src:/app/src
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 86400s
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s

@@ -1,14 +1,9 @@
-"""Сервис для работы с промптами из Langfuse."""
-
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional, Union
 
-try:
-    from langfuse import Langfuse
-except ImportError:
-    Langfuse = None
+from langfuse import get_client
 
 from src.services.langfuse.config import LangFuseConfig
 
@@ -16,45 +11,41 @@ logger = logging.getLogger(__name__)
 
 
 class LangfusePromptService:
-    """Сервис для получения и управления промптами из Langfuse."""
+    """Service for fetching and managing prompts from Langfuse."""
 
-    def __init__(self, config: Optional[LangFuseConfig] = None):
-        """Инициализация сервиса.
-
-        Args:
-            config: Конфигурация Langfuse. Если не указана, будет использована из settings.
-        """
+    def __init__(self, config: Optional[LangFuseConfig] = None) -> None:
         self.config = config
-        self._client: Optional[Langfuse] = None
+        self._client = None
         self._enabled = False
 
         if self.config and self.config.langfuse_enabled:
             try:
-                if Langfuse is None:
-                    logger.warning("Langfuse не установлен. Установите: pip install langfuse")
-                    self._enabled = False
-                elif self.config.is_configured_instance():
+                if self.config.is_configured_instance():
+                    from langfuse import Langfuse
+
                     self._client = Langfuse(
                         public_key=self.config.langfuse_public_key,
                         secret_key=self.config.langfuse_secret_key,
                         host=self.config.langfuse_host,
                     )
-                    self._enabled = True
-                    logger.info("Langfuse prompt service initialized successfully")
+
+                    if self._client.auth_check():
+                        self._enabled = True
+                        logger.info("[Langfuse] Prompt service initialized and authenticated")
+                    else:
+                        logger.warning("[Langfuse] Authentication check failed")
+                        self._client = None
                 else:
                     logger.warning(
-                        "Langfuse не настроен. Промпты будут загружаться из базы данных."
-                    )
-                    logger.debug(
-                        f"Public key set: {bool(self.config.langfuse_public_key)}, "
-                        f"Secret key set: {bool(self.config.langfuse_secret_key)}"
+                        "Langfuse not configured. Prompts will be loaded from database."
                     )
             except Exception as e:
-                logger.error(f"Ошибка инициализации Langfuse: {e}")
+                logger.error("[Langfuse] Init error: %s", e, exc_info=True)
                 self._enabled = False
+                self._client = None
 
     def is_enabled(self) -> bool:
-        """Проверяет, включен ли сервис Langfuse."""
+        """Check whether the Langfuse service is enabled."""
         return self._enabled and self._client is not None
 
     def get_prompt(
@@ -63,111 +54,86 @@ class LangfusePromptService:
         label: Optional[str] = None,
         version: Optional[int] = None,
     ) -> Optional[Any]:
-        """Получает промпт из Langfuse.
+        """Fetch a prompt from Langfuse.
 
         Args:
-            name: Имя промпта в Langfuse
-            label: Метка для фильтрации версий (например, "production")
-            version: Конкретная версия промпта (опционально)
+            name: Prompt name in Langfuse.
+            label: Label for filtering versions (e.g. "production").
+            version: Specific prompt version (optional).
 
         Returns:
-            Объект промпта из Langfuse или None, если не найден или сервис отключен
+            Langfuse prompt object or None if not found / service disabled.
         """
         if not self.is_enabled():
             return None
 
         try:
-            kwargs = {"name": name}
+            kwargs: dict[str, Any] = {"name": name}
             if label:
                 kwargs["label"] = label
             if version is not None:
                 kwargs["version"] = version
-            
+
             prompt = self._client.get_prompt(**kwargs)
-            logger.debug(f"Промпт '{name}' успешно загружен из Langfuse")
+            logger.debug("[Langfuse] Prompt '%s' loaded", name)
             return prompt
         except Exception as e:
-            logger.warning(
-                f"Не удалось загрузить промпт '{name}' из Langfuse: {e}"
-            )
+            logger.warning("[Langfuse] Failed to load prompt '%s': %s", name, e)
             return None
 
     def compile_prompt(
         self,
         prompt: Any,
-        variables: Optional[Dict[str, Any]] = None,
-    ) -> Union[str, List[Dict[str, str]]]:
-        """Компилирует промпт с переменными.
+        variables: Optional[dict[str, Any]] = None,
+    ) -> Union[str, list[dict[str, str]]]:
+        """Compile a prompt with variables.
 
         Args:
-            prompt: Объект промпта из Langfuse
-            variables: Словарь переменных для подстановки
+            prompt: Langfuse prompt object.
+            variables: Dictionary of variables for substitution.
 
         Returns:
-            Для text промптов - строка, для chat промптов - список сообщений
+            For text prompts — a string, for chat prompts — a list of messages.
         """
         if not prompt:
-            raise ValueError("Промпт не может быть None")
+            raise ValueError("Prompt cannot be None")
 
         try:
             if variables:
-                compiled = prompt.compile(**variables)
-            else:
-                compiled = prompt.prompt if hasattr(prompt, "prompt") else prompt
-
-            return compiled
+                return prompt.compile(**variables)
+            return prompt.prompt if hasattr(prompt, "prompt") else prompt
         except Exception as e:
-            logger.error(f"Ошибка компиляции промпта: {e}")
+            logger.error("[Langfuse] Prompt compile error: %s", e)
             raise
 
-    def get_prompt_config(self, prompt: Any) -> Dict[str, Any]:
-        """Получает конфигурацию промпта (model, temperature и т.д.).
-
-        Args:
-            prompt: Объект промпта из Langfuse
-
-        Returns:
-            Словарь с конфигурацией промпта
-        """
+    def get_prompt_config(self, prompt: Any) -> dict[str, Any]:
+        """Get prompt configuration (model, temperature, etc.)."""
         if not prompt:
             return {}
-
         try:
             if hasattr(prompt, "config"):
                 return prompt.config if isinstance(prompt.config, dict) else {}
             return {}
         except Exception as e:
-            logger.warning(f"Не удалось получить конфигурацию промпта: {e}")
+            logger.warning("[Langfuse] Failed to get prompt config: %s", e)
             return {}
 
     def create_prompt(
         self,
         name: str,
-        prompt: Union[str, List[Dict[str, str]]],
+        prompt: Union[str, list[dict[str, str]]],
         type: str = "text",
-        labels: Optional[List[str]] = None,
-        config: Optional[Dict[str, Any]] = None,
-        tags: Optional[List[str]] = None,
+        labels: Optional[list[str]] = None,
+        config: Optional[dict[str, Any]] = None,
+        tags: Optional[list[str]] = None,
     ) -> bool:
-        """Создает промпт в Langfuse.
-
-        Args:
-            name: Имя промпта
-            prompt: Текст промпта (для text) или список сообщений (для chat)
-            type: Тип промпта ("text" или "chat")
-            labels: Метки для промпта (например, ["production"])
-            config: Конфигурация промпта (model, temperature и т.д.)
-            tags: Теги для промпта
-
-        Returns:
-            True если промпт успешно создан, False в противном случае
-        """
+        """Create a prompt in Langfuse."""
         if not self.is_enabled():
-            logger.warning("Langfuse не включен, невозможно создать промпт")
+            logger.warning("[Langfuse] Not enabled, cannot create prompt")
             return False
 
         try:
-            request_data = {
+            request_data: dict[str, Any] = {
                 "name": name,
                 "prompt": prompt,
                 "type": type,
@@ -178,34 +144,23 @@ class LangfusePromptService:
                 request_data["config"] = config
             if tags:
                 request_data["tags"] = tags
-            
+
             self._client.api.prompts.create(request=request_data)
-            logger.info(f"Промпт '{name}' успешно создан в Langfuse")
+            logger.info("[Langfuse] Prompt '%s' created", name)
             return True
         except Exception as e:
-            logger.error(f"Ошибка создания промпта '{name}' в Langfuse: {e}")
+            logger.error("[Langfuse] Error creating prompt '%s': %s", name, e)
             return False
 
     def get_prompt_text(
         self,
         name: str,
-        variables: Optional[Dict[str, Any]] = None,
+        variables: Optional[dict[str, Any]] = None,
         label: Optional[str] = None,
         version: Optional[int] = None,
         fallback: Optional[str] = None,
     ) -> Optional[str]:
-        """Получает текстовый промпт из Langfuse и компилирует его с переменными.
-
-        Args:
-            name: Имя промпта в Langfuse
-            variables: Переменные для подстановки в промпт
-            label: Метка для фильтрации версий (например, "production")
-            version: Конкретная версия промпта
-            fallback: Значение по умолчанию, если промпт не найден
-
-        Returns:
-            Скомпилированный текстовый промпт или fallback
-        """
+        """Fetch and compile a text prompt from Langfuse."""
         prompt = self.get_prompt(name=name, label=label, version=version)
         if not prompt:
             return fallback
@@ -214,49 +169,31 @@ class LangfusePromptService:
             prompt_type = getattr(prompt, "type", None)
             if prompt_type is None:
                 class_name = type(prompt).__name__
-                if 'Chat' in class_name:
-                    logger.warning(
-                        f"Промпт '{name}' является chat промптом, возвращаю fallback"
-                    )
+                if "Chat" in class_name:
+                    logger.warning("[Langfuse] Prompt '%s' is chat type, using fallback", name)
                     return fallback
             elif prompt_type != "text":
-                logger.warning(
-                    f"Промпт '{name}' не является текстовым (type={prompt_type}), возвращаю fallback"
-                )
+                logger.warning("[Langfuse] Prompt '%s' type=%s, using fallback", name, prompt_type)
                 return fallback
-            
+
             compiled = self.compile_prompt(prompt, variables)
             if isinstance(compiled, str):
                 return compiled
-            else:
-                logger.warning(
-                    f"Промпт '{name}' не является текстовым, возвращаю fallback"
-                )
-                return fallback
+            logger.warning("[Langfuse] Prompt '%s' is not text, using fallback", name)
+            return fallback
         except Exception as e:
-            logger.error(f"Ошибка компиляции промпта '{name}': {e}")
+            logger.error("[Langfuse] Compile error for '%s': %s", name, e)
             return fallback
 
     def get_prompt_chat(
         self,
         name: str,
-        variables: Optional[Dict[str, Any]] = None,
+        variables: Optional[dict[str, Any]] = None,
         label: Optional[str] = None,
         version: Optional[int] = None,
-        fallback: Optional[List[Dict[str, str]]] = None,
-    ) -> Optional[List[Dict[str, str]]]:
-        """Получает chat промпт из Langfuse и компилирует его с переменными.
-
-        Args:
-            name: Имя промпта в Langfuse
-            variables: Переменные для подстановки в промпт
-            label: Метка для фильтрации версий (например, "production")
-            version: Конкретная версия промпта
-            fallback: Значение по умолчанию, если промпт не найден
-
-        Returns:
-            Скомпилированный chat промпт (список сообщений) или fallback
-        """
+        fallback: Optional[list[dict[str, str]]] = None,
+    ) -> Optional[list[dict[str, str]]]:
+        """Fetch and compile a chat prompt from Langfuse."""
         prompt = self.get_prompt(name=name, label=label, version=version)
         if not prompt:
             return fallback
@@ -265,25 +202,18 @@ class LangfusePromptService:
             prompt_type = getattr(prompt, "type", None)
             if prompt_type is None:
                 class_name = type(prompt).__name__
-                if 'Text' in class_name and 'Chat' not in class_name:
-                    logger.warning(
-                        f"Промпт '{name}' является text промптом, возвращаю fallback"
-                    )
+                if "Text" in class_name and "Chat" not in class_name:
+                    logger.warning("[Langfuse] Prompt '%s' is text type, using fallback", name)
                     return fallback
             elif prompt_type != "chat":
-                logger.warning(
-                    f"Промпт '{name}' не является chat промптом (type={prompt_type}), возвращаю fallback"
-                )
+                logger.warning("[Langfuse] Prompt '%s' type=%s, using fallback", name, prompt_type)
                 return fallback
-            
+
             compiled = self.compile_prompt(prompt, variables)
             if isinstance(compiled, list):
                 return compiled
-            else:
-                logger.warning(
-                    f"Промпт '{name}' не является chat промптом, возвращаю fallback"
-                )
-                return fallback
+            logger.warning("[Langfuse] Prompt '%s' is not chat, using fallback", name)
+            return fallback
         except Exception as e:
-            logger.error(f"Ошибка компиляции промпта '{name}': {e}")
+            logger.error("[Langfuse] Compile error for '%s': %s", name, e)
             return fallback

@@ -4,7 +4,7 @@ import asyncio
 from typing import Optional
 
 from src.services.messaging.base import BaseMessagingService
-from src.services.telegram.constants import ERROR_MESSAGE_TELEGRAM_FAILED, HTTP_TIMEOUT_SECONDS
+from src.constants import ERROR_MESSAGE_TELEGRAM_FAILED, HTTP_TIMEOUT_SECONDS
 
 _telegram_service: Optional[BaseMessagingService] = None
 _lock = asyncio.Lock()
