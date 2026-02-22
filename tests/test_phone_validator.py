@@ -1,16 +1,13 @@
-"""Tests for src.utils.validators.phone_validator."""
+"""Tests for phone toolkit contract."""
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
 
-from src.utils.validators.phone_validator import (
-    PhoneValidationError,
-    get_validated_phone,
+from src.toolkit import (
+    has_client_phone,
+    normalize_and_validate_phone,
     normalize_phone,
-    validate_client_phone,
     validate_phone,
-    validate_phone_dependency,
 )
 
 
@@ -58,44 +55,30 @@ class TestValidatePhone:
 
 
 # ---------------------------------------------------------------------------
-# get_validated_phone
+# normalize_and_validate_phone
 # ---------------------------------------------------------------------------
-class TestGetValidatedPhone:
+class TestNormalizeAndValidatePhone:
     def test_valid(self) -> None:
-        normalized, is_valid = get_validated_phone("+79123456789")
-        assert is_valid is True
+        normalized = normalize_and_validate_phone("+79123456789")
         assert normalized == "+79123456789"
 
     def test_invalid_raises(self) -> None:
-        with pytest.raises(PhoneValidationError):
-            get_validated_phone("123")
+        with pytest.raises(ValueError):
+            normalize_and_validate_phone("123")
 
 
 # ---------------------------------------------------------------------------
-# validate_phone_dependency
+# has_client_phone
 # ---------------------------------------------------------------------------
-class TestValidatePhoneDependency:
-    def test_valid_returns_normalized(self) -> None:
-        assert validate_phone_dependency("89123456789") == "+79123456789"
-
-    def test_invalid_raises_http_exception(self) -> None:
-        with pytest.raises(HTTPException) as exc_info:
-            validate_phone_dependency("123")
-        assert exc_info.value.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# validate_client_phone
-# ---------------------------------------------------------------------------
-class TestValidateClientPhone:
+class TestHasClientPhone:
     def test_valid(self) -> None:
-        assert validate_client_phone("+79123456789") is True
+        assert has_client_phone("+79123456789") is True
 
     def test_none(self) -> None:
-        assert validate_client_phone(None) is False
+        assert has_client_phone(None) is False
 
     def test_empty(self) -> None:
-        assert validate_client_phone("") is False
+        assert has_client_phone("") is False
 
     def test_whitespace_only(self) -> None:
-        assert validate_client_phone("   ") is False
+        assert has_client_phone("   ") is False

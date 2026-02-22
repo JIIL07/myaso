@@ -14,8 +14,8 @@ from src.constants import (
     MAX_VECTOR_SEARCH_RESULTS,
     VECTOR_SEARCH_PHOTO_LIMIT,
 )
-from src.tools._formatting import format_and_return_products, get_require_photo
-from src.utils.formatters.formatters import has_photo
+from src.toolkit import has_product_photo
+from src.tools._formatting import format_and_return_products
 from src.utils.retrievers import SupabaseVectorRetriever
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ async def vector_search(
     """
     retriever = SupabaseVectorRetriever()
     k = min(k, MAX_VECTOR_SEARCH_RESULTS)
-    require_photo = get_require_photo(runtime)
+    require_photo = bool(runtime and runtime.state.get("require_photo", False))
 
     logger.debug(
         "[vector_search] query='%s', require_photo=%s, k=%s",
@@ -61,7 +61,7 @@ async def vector_search(
 
     # --- Photo filter (at document level, before conversion) ---
     if require_photo:
-        documents = [doc for doc in documents if has_photo(doc.metadata)]
+        documents = [doc for doc in documents if has_product_photo(doc.metadata)]
         if not documents:
             logger.warning("[vector_search] Нет товаров с фото по запросу '%s'", query)
             return ERROR_MESSAGE_PRODUCTS_WITH_PHOTOS_NOT_FOUND, []

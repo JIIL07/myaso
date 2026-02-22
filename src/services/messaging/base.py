@@ -4,9 +4,8 @@ from urllib.parse import urlparse
 
 from src.constants import SYSTEM_VALUE_PRICELIST
 from src.services.ai.prompt import get_system_value
-from src.utils import remove_markdown_symbols
+from src.toolkit import clean_message_text
 from src.utils.http.http_client import send_http_post
-from src.utils.validators.string_validators import validate_not_empty
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +28,11 @@ class BaseMessagingService:
         self.recipient_name = recipient_name
 
     async def send_message(self, recipient: str, message: str) -> bool:
-        if not validate_not_empty(recipient, self.recipient_name, "send_message"):
+        if not recipient or not recipient.strip():
+            logger.warning("[Validator] Empty %s (send_message)", self.recipient_name)
             return False
-        if not validate_not_empty(message, "сообщение", "send_message"):
+        if not message or not message.strip():
+            logger.warning("[Validator] Empty сообщение (send_message)")
             return False
         return await send_http_post(
             url=self.send_message_url,
@@ -44,9 +45,11 @@ class BaseMessagingService:
     async def send_image(
         self, recipient: str, file_url: str, caption: str = "", extension: str = "png",
     ) -> bool:
-        if not validate_not_empty(recipient, self.recipient_name, "send_image"):
+        if not recipient or not recipient.strip():
+            logger.warning("[Validator] Empty %s (send_image)", self.recipient_name)
             return False
-        if not validate_not_empty(file_url, "URL файла", "send_image"):
+        if not file_url or not file_url.strip():
+            logger.warning("[Validator] Empty URL файла (send_image)")
             return False
         return await send_http_post(
             url=self.send_file_url,
@@ -61,7 +64,7 @@ class BaseMessagingService:
         self, client_id: str, message_text: str, remove_markdown: bool = True, context: str = "",
     ) -> bool:
         try:
-            text = remove_markdown_symbols(message_text) if remove_markdown else message_text
+            text = clean_message_text(message_text) if remove_markdown else message_text
             success = await self.send_message(client_id, text)
             if not success:
                 logger.warning("[%s] Failed to send message for %s", context, client_id)

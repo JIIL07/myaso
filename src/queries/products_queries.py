@@ -37,15 +37,14 @@ async def get_products_by_sql_conditions(
     sql_conditions: str, limit: int = 50
 ) -> tuple[list[Product], bool]:
     from src.services.database.database import get_pool
-    from src.utils.formatters.formatters import records_to_json
-    from src.utils.validators.sql_validator import validate_sql_conditions
+    from src.toolkit import records_to_json, validate_sql_conditions
 
     await validate_sql_conditions(sql_conditions)
 
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
-            query = "SELECT * FROM myaso.safe_product_search($1::text, $2::int)"
+            query = "SELECT * FROM safe_product_search($1::text, $2::int)"
             result = await conn.fetch(query, sql_conditions, limit + 1)
             products_dict = records_to_json(result)
 
@@ -61,7 +60,7 @@ async def get_products_by_sql_conditions(
         error_msg = str(e)
         if "does not exist" in error_msg and "safe_product_search" in error_msg:
             raise RuntimeError(
-                f"SQL функция myaso.safe_product_search не найдена в базе данных. "
+                f"SQL функция safe_product_search не найдена в базе данных. "
                 f"Необходимо выполнить SQL файл: sql/safe_product_search.sql"
             ) from e
         raise ConnectionError(f"Ошибка подключения к базе данных: {e}") from e
@@ -71,7 +70,7 @@ async def get_products_by_sql_conditions(
             raise ValueError(f"Синтаксическая ошибка SQL: {e}") from e
         if "does not exist" in error_msg and "safe_product_search" in error_msg:
             raise RuntimeError(
-                f"SQL функция myaso.safe_product_search не найдена в базе данных. "
+                f"SQL функция safe_product_search не найдена в базе данных. "
                 f"Необходимо выполнить SQL файл: sql/safe_product_search.sql"
             ) from e
         raise RuntimeError(f"Ошибка при получении товаров по SQL условиям: {e}") from e

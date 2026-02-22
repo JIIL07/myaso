@@ -14,8 +14,8 @@ from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.constants import COLUMN_TOPIC, COLUMN_VALUE, TABLE_SYSTEM, SYSTEM_VALUE_PRICELIST
 from src.services.database.supabase_client import get_supabase_client
 from src.services.database.utils import execute_with_timeout
+from src.toolkit import has_client_phone
 from src.tools._telegram import send_telegram_file
-from src.utils.validators import validate_client_phone
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ async def send_pricelist(
     try:
         client_phone = runtime.context.client_phone
 
-        if not validate_client_phone(client_phone):
+        if not has_client_phone(client_phone):
             return "Номер телефона клиента не указан.", {"success": False, "error": "missing_phone"}
 
         # --- Fetch pricelist URL from system table ---

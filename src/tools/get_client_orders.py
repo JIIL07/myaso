@@ -10,7 +10,7 @@ from langchain_core.tools import tool
 
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.queries.orders_queries import get_client_orders as get_client_orders_from_db
-from src.utils.validators import validate_client_phone
+from src.toolkit import has_client_phone
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ async def get_client_orders(
     try:
         client_phone = runtime.context.client_phone
 
-        if not validate_client_phone(client_phone):
+        if not has_client_phone(client_phone):
             return "Номер телефона клиента не указан.", {}
 
         orders = await get_client_orders_from_db(client_phone)

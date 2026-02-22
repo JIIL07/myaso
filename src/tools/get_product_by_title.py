@@ -9,7 +9,7 @@ from langchain_core.tools import tool
 
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.queries.products_queries import get_product_by_title as get_product_by_title_db
-from src.tools._formatting import format_and_return_products, get_require_photo
+from src.tools._formatting import format_and_return_products
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ async def get_product_by_title(
     - Описание общими словами -> vector_search
     - Поиск по нескольким критериям -> execute_sql_query
     """
-    require_photo = get_require_photo(runtime)
+    require_photo = bool(runtime and runtime.state.get("require_photo", False))
 
     try:
         product = await get_product_by_title_db(title)

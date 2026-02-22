@@ -10,11 +10,7 @@ from langchain_core.tools import tool
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.constants import ERROR_MESSAGE_DATABASE_NOT_CONFIGURED, PHOTO_SEARCH_LIMIT_MULTIPLIER
 from src.queries.products_queries import get_random_products as get_random_products_db
-from src.tools._formatting import (
-    calculate_search_limit,
-    format_and_return_products,
-    get_require_photo,
-)
+from src.tools._formatting import format_and_return_products
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +30,10 @@ async def get_random_products(
     - Есть конкретные критерии поиска -> vector_search или execute_sql_query
     - Точное название товара -> get_product_by_title
     """
-    require_photo = get_require_photo(runtime)
+    require_photo = bool(runtime and runtime.state.get("require_photo", False))
 
     try:
-        search_limit = calculate_search_limit(limit, require_photo, PHOTO_SEARCH_LIMIT_MULTIPLIER)
+        search_limit = (limit * PHOTO_SEARCH_LIMIT_MULTIPLIER) if require_photo else limit
         products = await get_random_products_db(search_limit)
 
         return await format_and_return_products(

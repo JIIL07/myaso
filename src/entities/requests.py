@@ -1,15 +1,14 @@
 """Модели для входящих запросов."""
 
 import re
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from src.utils.validators.phone_validator import normalize_phone, validate_phone
+from src.toolkit import normalize_and_validate_phone
 
 
-class InitConversationRequest(BaseModel):
-    """Модель запроса для инициализации беседы."""
+class ClientPhoneRequest(BaseModel):
+    """Базовая модель с нормализованным номером телефона."""
 
     client_phone: str = Field(
         ...,
@@ -22,15 +21,11 @@ class InitConversationRequest(BaseModel):
     @classmethod
     def validate_client_phone(cls, v: str) -> str:
         """Валидирует и нормализует номер телефона."""
-        if not v or not v.strip():
-            raise ValueError("Номер телефона не может быть пустым")
-        
-        normalized = normalize_phone(v.strip())
-        
-        if not validate_phone(normalized):
-            raise ValueError("Неверный формат номера телефона")
-        
-        return normalized
+        return normalize_and_validate_phone(v)
+
+
+class InitConversationRequest(ClientPhoneRequest):
+    """Модель запроса для инициализации беседы."""
 
 
 class UserMessageRequest(InitConversationRequest):
@@ -54,26 +49,5 @@ class UserMessageRequest(InitConversationRequest):
         return message
 
 
-class ResetConversationRequest(BaseModel):
+class ResetConversationRequest(ClientPhoneRequest):
     """Модель запроса для сброса истории беседы."""
-
-    client_phone: str = Field(
-        ...,
-        min_length=1,
-        max_length=20,
-        description="Номер телефона клиента",
-    )
-
-    @field_validator("client_phone")
-    @classmethod
-    def validate_client_phone(cls, v: str) -> str:
-        """Валидирует и нормализует номер телефона."""
-        if not v or not v.strip():
-            raise ValueError("Номер телефона не может быть пустым")
-        
-        normalized = normalize_phone(v.strip())
-        
-        if not validate_phone(normalized):
-            raise ValueError("Неверный формат номера телефона")
-        
-        return normalized

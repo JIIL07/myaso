@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from src.config.settings import settings
 from src.constants import HTTP_TIMEOUT_SECONDS
+from src.toolkit import has_client_phone
 from src.utils.http.http_client import send_http_post
-from src.utils.validators import validate_not_empty
 
 
 async def send_telegram_file(
@@ -15,10 +15,10 @@ async def send_telegram_file(
     extension: str = "png",
 ) -> bool:
     """Send a file to a Telegram user via the bot API proxy."""
-    if not validate_not_empty(phone, "ID чата", "send_telegram_file"):
+    if not has_client_phone(phone):
         return False
 
-    if not validate_not_empty(file_url, "URL файла", "send_telegram_file"):
+    if not file_url or not str(file_url).strip():
         return False
 
     return await send_http_post(

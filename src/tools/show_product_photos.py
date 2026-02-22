@@ -11,8 +11,8 @@ from langchain_core.tools import tool
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.services.database.supabase_client import get_supabase_client
 from src.services.database.utils import execute_with_timeout
+from src.toolkit import has_client_phone
 from src.tools._telegram import send_telegram_file
-from src.utils.validators import validate_client_phone
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ async def show_product_photos(
     try:
         client_phone = runtime.context.client_phone
 
-        if not validate_client_phone(client_phone):
+        if not has_client_phone(client_phone):
             return "Номер телефона клиента не указан.", _EMPTY_ARTIFACT.copy()
 
         product_ids = runtime.state.get("product_ids", [])

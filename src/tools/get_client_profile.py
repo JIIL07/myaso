@@ -10,7 +10,7 @@ from langchain_core.tools import tool
 
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.queries.clients_queries import get_client_profile_text
-from src.utils.validators import validate_client_phone
+from src.toolkit import has_client_phone
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ async def get_client_profile(
     try:
         client_phone = runtime.context.client_phone
 
-        if not validate_client_phone(client_phone):
+        if not has_client_phone(client_phone):
             return "Номер телефона клиента не указан.", {}
 
         profile_text = await get_client_profile_text(client_phone)

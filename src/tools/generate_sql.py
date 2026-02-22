@@ -15,8 +15,8 @@ from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.config.settings import settings
 from src.constants import TEXT_TO_SQL_TEMPERATURE
 from src.services.ai.prompt import escape_prompt_variables, get_prompt
+from src.toolkit import ensure_safe_select, validate_sql_conditions
 from src.tools._schema import get_products_table_schema
-from src.utils.validators import validate_sql_conditions, validate_sql_safety
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +95,11 @@ async def _generate_sql_impl(
     if not sql_query:
         raise ValueError("LLM вернул пустой SQL запрос")
 
-    if not validate_sql_safety(sql_query):
-        logger.error("[generate_sql] Опасная SQL команда: %s", sql_query[:200])
-        raise ValueError("Обнаружена опасная SQL команда")
+    try:
+        ensure_safe_select(sql_query)
+    except ValueError as exc:
+        logger.error("[generate_sql] Некорректный SQL: %s", sql_query[:200])
+        raise ValueError("Некорректный SQL запрос") from exc
 
     upper = sql_query.upper().strip()
     if not (upper.startswith("SELECT") or upper.startswith("WITH")):
