@@ -16,7 +16,7 @@ from src.constants import DEFAULT_VECTOR_SEARCH_K
 logger = logging.getLogger(__name__)
 
 
-class SupabaseVectorRetriever(BaseRetriever):
+class PostgresVectorRetriever(BaseRetriever):
     def __init__(
         self,
         *,

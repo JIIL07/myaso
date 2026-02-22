@@ -17,6 +17,9 @@ def test_no_legacy_validator_formatter_imports() -> None:
     forbidden = (
         "src.utils.validators",
         "src.utils.formatters.formatters",
+        "src.services.database.supabase_client",
+        "from supabase import",
+        "import supabase",
     )
 
     offenders: list[str] = []

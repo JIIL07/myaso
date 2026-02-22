@@ -9,7 +9,7 @@ from src.constants import (
     TABLE_SYSTEM,
     PROMPT_CACHE_TTL,
 )
-from src.services.database.supabase_client import get_supabase_client
+from src.services.database.database import get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -86,17 +86,20 @@ async def get_prompt(
 
 async def get_system_value(topic: str) -> Optional[str]:
     try:
-        from src.services.database.utils import execute_with_timeout
-        supabase = await get_supabase_client()
-        result = await execute_with_timeout(
-            supabase.table(TABLE_SYSTEM)
-            .select(COLUMN_VALUE)
-            .eq(COLUMN_TOPIC, topic)
-            .execute(),
-            operation_name="get_system_value(%s)" % topic,
-        )
-        if result.data and len(result.data) > 0:
-            return result.data[0].get(COLUMN_VALUE)
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT %s
+                FROM myaso.%s
+                WHERE %s = $1
+                LIMIT 1
+                """
+                % (COLUMN_VALUE, TABLE_SYSTEM, COLUMN_TOPIC),
+                topic,
+            )
+        if row:
+            return dict(row).get(COLUMN_VALUE)
         return None
     except Exception as e:
         logger.error("[Prompt] Error getting system value '%s': %s", topic, e)
@@ -105,14 +108,21 @@ async def get_system_value(topic: str) -> Optional[str]:
 
 async def get_all_system_values() -> dict[str, str]:
     try:
-        from src.services.database.utils import execute_with_timeout
-        supabase = await get_supabase_client()
-        result = await execute_with_timeout(
-            supabase.table(TABLE_SYSTEM).select("%s, %s" % (COLUMN_TOPIC, COLUMN_VALUE)).execute(),
-            operation_name="get_all_system_values",
-        )
-        if result.data:
-            return {row.get(COLUMN_TOPIC, ""): row.get(COLUMN_VALUE, "") for row in result.data}
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT %s, %s
+                FROM myaso.%s
+                """
+                % (COLUMN_TOPIC, COLUMN_VALUE, TABLE_SYSTEM)
+            )
+        if rows:
+            values: dict[str, str] = {}
+            for row in rows:
+                row_dict = dict(row)
+                values[row_dict.get(COLUMN_TOPIC, "")] = row_dict.get(COLUMN_VALUE, "")
+            return values
         return {}
     except Exception as e:
         logger.error("[Prompt] Error getting system values: %s", e)

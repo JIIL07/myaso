@@ -26,7 +26,7 @@ from src.constants import (
     PROMPT_NAME_SYSTEM_PROMPT,
     PROMPT_NAME_UNCLEAR,
 )
-from src.services.memory import SupabaseConversationMemory
+from src.services.memory import PostgresConversationMemory
 from src.queries.clients_queries import get_client_style
 
 logger = logging.getLogger(__name__)
@@ -124,8 +124,8 @@ class ConversationService:
             logger.error("[%s] Critical error for %s: %s", context, request.client_phone, e, exc_info=True)
             return {"success": False, "error": str(e)}
 
-    async def _initialize_memory(self, client_phone: str) -> SupabaseConversationMemory:
-        return await SupabaseConversationMemory.create(client_phone)
+    async def _initialize_memory(self, client_phone: str) -> PostgresConversationMemory:
+        return await PostgresConversationMemory.create(client_phone)
 
     async def _create_agent_with_memory(self, client_phone: str, clear_memory: bool = False):
         memory = await self._initialize_memory(client_phone)
@@ -234,7 +234,7 @@ class ConversationService:
     async def reset_conversation(self, request: ResetConversationRequest) -> dict[str, Any]:
         context = "resetConversation"
         try:
-            memory = await SupabaseConversationMemory.create(request.client_phone)
+            memory = await PostgresConversationMemory.create(request.client_phone)
             await memory.clear()
             logger.info("[%s] History reset for %s", context, request.client_phone)
             return {"success": True}

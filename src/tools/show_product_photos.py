@@ -9,8 +9,7 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
 
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
-from src.services.database.supabase_client import get_supabase_client
-from src.services.database.utils import execute_with_timeout
+from src.services.database.database import get_pool
 from src.toolkit import has_client_phone
 from src.tools._telegram import send_telegram_file
 
@@ -53,17 +52,19 @@ async def show_product_photos(
         failed_ids: list[int] = []
         not_found_ids: list[int] = []
 
-        supabase = await get_supabase_client()
-
         try:
-            result = await execute_with_timeout(
-                supabase.table("products")
-                .select("id, title, photo")
-                .in_("id", product_ids)
-                .execute(),
-                operation_name="show_product_photos.batch_get_products",
-            )
-            products_map = {p["id"]: p for p in (result.data or [])}
+            normalized_ids = [int(product_id) for product_id in product_ids]
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, title, photo
+                    FROM myaso.products
+                    WHERE id = ANY($1::int[])
+                    """,
+                    normalized_ids,
+                )
+            products_map = {row["id"]: dict(row) for row in rows}
         except Exception as e:
             logger.error("[show_product_photos] Ошибка получения товаров: %s", e, exc_info=True)
             not_found_ids = product_ids.copy()

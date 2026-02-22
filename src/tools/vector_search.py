@@ -16,7 +16,7 @@ from src.constants import (
 )
 from src.toolkit import has_product_photo
 from src.tools._formatting import format_and_return_products
-from src.utils.retrievers import SupabaseVectorRetriever
+from src.utils.retrievers import PostgresVectorRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ async def vector_search(
     - Конкретные числовые критерии (цена, вес) -> execute_sql_query
     - Случайные товары без критериев -> get_random_products
     """
-    retriever = SupabaseVectorRetriever()
+    retriever = PostgresVectorRetriever()
     k = min(k, MAX_VECTOR_SEARCH_RESULTS)
     require_photo = bool(runtime and runtime.state.get("require_photo", False))
 

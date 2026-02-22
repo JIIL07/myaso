@@ -3,7 +3,6 @@ from functools import lru_cache
 from dotenv import load_dotenv
 
 from src.services.ai.config import AlibabaSettings, OpenRouterSettings
-from src.services.database.config import SupabaseSettings
 from src.services.langfuse.config import LangFuseConfig
 from src.services.telegram.config import TelegramSettings
 from src.services.whatsapp.config import WhatsAppSettings
@@ -16,7 +15,6 @@ class Settings:
     """Aggregated application settings."""
 
     def __init__(self) -> None:
-        self.supabase = SupabaseSettings()
         self.whatsapp = WhatsAppSettings()
         self.telegram = TelegramSettings()
         self.langfuse = LangFuseConfig()

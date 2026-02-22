@@ -1,18 +1,23 @@
 from typing import Any, Optional
 
-from src.services.database.supabase_client import get_supabase_client
-from src.services.database.utils import execute_with_timeout
+from src.services.database.database import get_pool
 
 
 async def get_client_by_phone(phone: str) -> Optional[dict[str, Any]]:
     try:
-        supabase = await get_supabase_client()
-        result = await execute_with_timeout(
-            supabase.table("clients").select("*").eq("phone", phone).execute(),
-            operation_name="get_client_by_phone(%s)" % phone,
-        )
-        if result.data and len(result.data) > 0:
-            return result.data[0]
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT *
+                FROM myaso.clients
+                WHERE phone = $1
+                LIMIT 1
+                """,
+                phone,
+            )
+        if row:
+            return dict(row)
         return None
     except Exception as e:
         raise RuntimeError("Error getting client: %s" % e) from e

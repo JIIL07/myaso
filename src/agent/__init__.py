@@ -1,6 +1,6 @@
 """Agent package — lazy imports to prevent circular dependencies."""
 
-from src.services.memory import SupabaseConversationMemory
+from src.services.memory import PostgresConversationMemory
 
 
 def __getattr__(name: str):
@@ -23,5 +23,5 @@ __all__ = [
     "BaseAgent",
     "ProductAgent",
     "AgentFactory",
-    "SupabaseConversationMemory",
+    "PostgresConversationMemory",
 ]

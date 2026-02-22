@@ -1,6 +1,6 @@
 """LangChain retrievers."""
 
-from .vector_retrievers import SupabaseVectorRetriever
+from .vector_retrievers import PostgresVectorRetriever
 
-__all__ = ["SupabaseVectorRetriever"]
+__all__ = ["PostgresVectorRetriever"]
 

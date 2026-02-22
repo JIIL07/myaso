@@ -5,8 +5,8 @@ import random
 import asyncpg
 
 from src.entities.product import Product
-from src.services.database.supabase_client import get_supabase_client
-from src.services.database.utils import execute_with_timeout
+from src.services.database.database import get_pool
+from src.toolkit import records_to_json
 
 
 async def get_random_products(limit: int = 10) -> list[Product]:
@@ -14,18 +14,22 @@ async def get_random_products(limit: int = 10) -> list[Product]:
         limit = 20
 
     try:
-        supabase = await get_supabase_client()
-        result = await execute_with_timeout(
-            supabase.table("products")
-            .select("id, title, supplier_name, from_region, photo, order_price_kg")
-            .ilike("supplier_name", "%ООО%КИТ%")
-            .limit(limit * 5)
-            .execute(),
-            operation_name=f"get_random_products(limit={limit})",
-        )
-        
-        if result.data:
-            products_list = [Product(**product) for product in result.data]
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, title, supplier_name, from_region, photo, order_price_kg
+                FROM myaso.products
+                WHERE supplier_name ILIKE $1
+                LIMIT $2
+                """,
+                "%ООО%КИТ%",
+                limit * 5,
+            )
+        products_dict = records_to_json(rows)
+
+        if products_dict:
+            products_list = [Product(**product) for product in products_dict]
             random.shuffle(products_list)
             return products_list[:limit]
         return []
@@ -36,8 +40,7 @@ async def get_random_products(limit: int = 10) -> list[Product]:
 async def get_products_by_sql_conditions(
     sql_conditions: str, limit: int = 50
 ) -> tuple[list[Product], bool]:
-    from src.services.database.database import get_pool
-    from src.toolkit import records_to_json, validate_sql_conditions
+    from src.toolkit import validate_sql_conditions
 
     await validate_sql_conditions(sql_conditions)
 
@@ -78,18 +81,20 @@ async def get_products_by_sql_conditions(
 
 async def get_product_by_title(title: str) -> Product | None:
     try:
-        supabase = await get_supabase_client()
-        result = await execute_with_timeout(
-            supabase.table("products")
-            .select("*")
-            .eq("title", title)
-            .limit(1)
-            .execute(),
-            operation_name=f"get_product_by_title({title})",
-        )
-        
-        if result.data and len(result.data) > 0:
-            return Product(**result.data[0])
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT *
+                FROM myaso.products
+                WHERE title = $1
+                LIMIT 1
+                """,
+                title,
+            )
+
+        if row:
+            return Product(**dict(row))
         return None
     except Exception as e:
         raise RuntimeError(f"Ошибка при получении товара по названию: {e}") from e

@@ -12,8 +12,7 @@ from langchain_core.tools import tool
 
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.constants import COLUMN_TOPIC, COLUMN_VALUE, TABLE_SYSTEM, SYSTEM_VALUE_PRICELIST
-from src.services.database.supabase_client import get_supabase_client
-from src.services.database.utils import execute_with_timeout
+from src.services.database.database import get_pool
 from src.toolkit import has_client_phone
 from src.tools._telegram import send_telegram_file
 
@@ -41,15 +40,19 @@ async def send_pricelist(
 
         # --- Fetch pricelist URL from system table ---
         try:
-            supabase = await get_supabase_client()
-            result = await execute_with_timeout(
-                supabase.table(TABLE_SYSTEM)
-                .select(COLUMN_VALUE)
-                .eq(COLUMN_TOPIC, SYSTEM_VALUE_PRICELIST)
-                .execute(),
-                operation_name="send_pricelist.get_pricelist_url",
-            )
-            pricelist_url = result.data[0].get(COLUMN_VALUE) if result.data else None
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT %s
+                    FROM myaso.%s
+                    WHERE %s = $1
+                    LIMIT 1
+                    """
+                    % (COLUMN_VALUE, TABLE_SYSTEM, COLUMN_TOPIC),
+                    SYSTEM_VALUE_PRICELIST,
+                )
+            pricelist_url = dict(row).get(COLUMN_VALUE) if row else None
         except Exception as e:
             logger.error("[send_pricelist] Ошибка получения URL: %s", e, exc_info=True)
             return (
