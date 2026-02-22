@@ -2,14 +2,33 @@
 MAX_AGENT_ITERATIONS = 100
 MAX_AGENT_EXECUTION_TIME = 1800
 AGENT_RECURSION_LIMIT = MAX_AGENT_ITERATIONS + 5
+AGENT_MAX_ITERATIONS_CLAMP = 10_000
 DEFAULT_TEMPERATURE = 0.5
 TEXT_TO_SQL_TEMPERATURE = 0.1
 MAX_LOGS = 500
+
+MODEL_RETRY_MAX_RETRIES = 2
+MODEL_RETRY_BACKOFF_FACTOR = 2.0
+MODEL_RETRY_INITIAL_DELAY = 1.0
+MODEL_RETRY_MAX_DELAY = 60.0
+MODEL_RETRY_JITTER = True
+
+TOOL_RETRY_MAX_RETRIES = 3
+TOOL_RETRY_BACKOFF_FACTOR = 2.0
+TOOL_RETRY_INITIAL_DELAY = 1.0
+TOOL_RETRY_MAX_DELAY = 60.0
+TOOL_RETRY_JITTER = True
+
+TOOL_ERROR_ON_FAILURE = "return_message"
+MODEL_RETRY_ON_FAILURE = "error"
 
 # === SQL ===
 DEFAULT_SQL_LIMIT = 50
 MAX_SQL_LIMIT = 100
 MAX_SQL_RETRY_ATTEMPTS = 3
+FULL_SQL_RESULT_PREFIX = "Найдено строк: {count}\n\n{content}"
+SQL_EMPTY_QUERY_MESSAGE = "SQL запрос пустой."
+SQL_FORBIDDEN_MESSAGE = "В запросе обнаружена запрещенная команда"
 
 # === Vector Search ===
 DEFAULT_VECTOR_SEARCH_K = 10
@@ -61,6 +80,7 @@ PROMPT_NAME_FUNCTION = "function"
 PROMPT_NAME_INFO = "info"
 PROMPT_NAME_UNCLEAR = "unclear"
 PROMPT_CACHE_TTL = 600
+PROMPT_REQUIRED_STRICT = True
 
 # === System Values ===
 SYSTEM_VALUE_PRICELIST = "Прайс-лист"
@@ -68,6 +88,7 @@ DEFAULT_FIELD_VALUE = "по запросу"
 
 # === Error Messages ===
 ERROR_MESSAGE_AGENT_FAILED = "Ой, что-то пошло не так 😔. Попробуйте написать еще раз, пожалуйста!"
+ERROR_MESSAGE_HITL_FALLBACK = "Извините, я не смог обработать ваш запрос. Пожалуйста, свяжитесь с нашим менеджером для получения помощи."
 ERROR_MESSAGE_PRODUCTS_NOT_FOUND = "Товары по вашему запросу не найдены."
 ERROR_MESSAGE_PRODUCTS_WITH_PHOTOS_NOT_FOUND = "Товары с фотографиями по вашему запросу не найдены."
 ERROR_MESSAGE_DATABASE_NOT_CONFIGURED = "Не настроено подключение к базе данных."

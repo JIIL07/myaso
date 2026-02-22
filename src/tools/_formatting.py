@@ -3,11 +3,27 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
+
+from langchain.tools import ToolRuntime
+
+from src.agent.product_agent.policy import get_agent_policy
+from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.services.ai.prompt import get_all_system_values
 from src.toolkit import filter_products_with_photo, format_products_list
 
 logger = logging.getLogger(__name__)
+
+
+def get_require_photo(
+    runtime: Optional[ToolRuntime[ProductAgentContext, ProductAgentState]],
+) -> bool:
+    return bool(runtime and runtime.state.get("require_photo", False))
+
+
+def calculate_search_limit(limit: int, require_photo: bool) -> int:
+    policy = get_agent_policy()
+    return policy.photo_search_limit(base_limit=limit, require_photo=require_photo)
 
 
 async def format_and_return_products(

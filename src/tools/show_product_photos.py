@@ -11,11 +11,45 @@ from langchain_core.tools import tool
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.services.database.database import get_pool
 from src.toolkit import has_client_phone
+from src.tools._contract import fail_response, ok_response
 from src.tools._telegram import send_telegram_file
 
 logger = logging.getLogger(__name__)
 
 _EMPTY_ARTIFACT: dict[str, Any] = {"sent": [], "failed": [], "not_found": [], "total": 0}
+
+
+async def _fetch_products_map(product_ids: list[int]) -> dict[int, dict[str, Any]]:
+    normalized_ids = [int(product_id) for product_id in product_ids]
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, title, photo
+            FROM myaso.products
+            WHERE id = ANY($1::int[])
+            """,
+            normalized_ids,
+        )
+    return {row["id"]: dict(row) for row in rows}
+
+
+def _build_result_text(sent_ids: list[int], failed_ids: list[int], not_found_ids: list[int]) -> str:
+    parts: list[str] = []
+    if sent_ids:
+        parts.append(
+            "✅ УСПЕШНО ОТПРАВЛЕНО: Фотографии %d товаров отправлены клиенту." % len(sent_ids)
+        )
+    if failed_ids:
+        parts.append(
+            "❌ НЕ ОТПРАВЛЕНО: %d товаров — фото отсутствует или ошибка отправки. "
+            "Предоставь информацию текстом." % len(failed_ids)
+        )
+    if not_found_ids:
+        parts.append(
+            "⚠️ НЕ НАЙДЕНО: %d товаров не найдены в базе данных." % len(not_found_ids)
+        )
+    return "\n\n".join(parts) if parts else "Нет товаров для отправки фотографий."
 
 
 @tool(response_format="content_and_artifact")
@@ -38,33 +72,28 @@ async def show_product_photos(
         client_phone = runtime.context.client_phone
 
         if not has_client_phone(client_phone):
-            return "Номер телефона клиента не указан.", _EMPTY_ARTIFACT.copy()
+            return fail_response(
+                "Номер телефона клиента не указан.",
+                error_code="missing_phone",
+                artifact=_EMPTY_ARTIFACT.copy(),
+            )
 
         product_ids = runtime.state.get("product_ids", [])
 
         if not product_ids:
-            return (
+            return fail_response(
                 "Нет сохраненных ID товаров для отправки фотографий. "
-                "Сначала используй инструменты поиска товаров."
-            ), _EMPTY_ARTIFACT.copy()
+                "Сначала используй инструменты поиска товаров.",
+                error_code="missing_product_ids",
+                artifact=_EMPTY_ARTIFACT.copy(),
+            )
 
         sent_ids: list[int] = []
         failed_ids: list[int] = []
         not_found_ids: list[int] = []
 
         try:
-            normalized_ids = [int(product_id) for product_id in product_ids]
-            pool = await get_pool()
-            async with pool.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT id, title, photo
-                    FROM myaso.products
-                    WHERE id = ANY($1::int[])
-                    """,
-                    normalized_ids,
-                )
-            products_map = {row["id"]: dict(row) for row in rows}
+            products_map = await _fetch_products_map(product_ids)
         except Exception as e:
             logger.error("[show_product_photos] Ошибка получения товаров: %s", e, exc_info=True)
             not_found_ids = product_ids.copy()
@@ -101,24 +130,7 @@ async def show_product_photos(
                 )
                 failed_ids.append(product_id)
 
-        # --- Build result text ---
-        parts: list[str] = []
-        if sent_ids:
-            parts.append(
-                "✅ УСПЕШНО ОТПРАВЛЕНО: Фотографии %d товаров отправлены клиенту." % len(sent_ids)
-            )
-        if failed_ids:
-            parts.append(
-                "❌ НЕ ОТПРАВЛЕНО: %d товаров — фото отсутствует или ошибка отправки. "
-                "Предоставь информацию текстом." % len(failed_ids)
-            )
-        if not_found_ids:
-            parts.append(
-                "⚠️ НЕ НАЙДЕНО: %d товаров не найдены в базе данных." % len(not_found_ids)
-            )
-
-        result_text = "\n\n".join(parts) if parts else "Нет товаров для отправки фотографий."
-
+        result_text = _build_result_text(sent_ids, failed_ids, not_found_ids)
         artifact = {
             "sent": sent_ids,
             "failed": failed_ids,
@@ -128,11 +140,15 @@ async def show_product_photos(
             "failed_count": len(failed_ids),
             "not_found_count": len(not_found_ids),
         }
-        return result_text, artifact
+        if sent_ids:
+            return ok_response(result_text, artifact=artifact)
+        return fail_response(result_text, error_code="nothing_sent", artifact=artifact)
 
     except Exception as e:
         logger.error("[show_product_photos] Критическая ошибка: %s", e, exc_info=True)
-        return (
+        return fail_response(
             "Произошла критическая ошибка при отправке фотографий. "
-            "Попробуйте позже или обратитесь в поддержку."
-        ), _EMPTY_ARTIFACT.copy()
+            "Попробуйте позже или обратитесь в поддержку.",
+            error_code="critical_error",
+            artifact=_EMPTY_ARTIFACT.copy(),
+        )

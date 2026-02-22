@@ -3,19 +3,52 @@
 from __future__ import annotations
 
 import logging
-import re
+from typing import Any
 
 from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
 
+from src.agent.product_agent.policy import get_agent_policy
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
-from src.constants import DEFAULT_SQL_LIMIT, PHOTO_SEARCH_LIMIT_MULTIPLIER
+from src.constants import (
+    ERROR_MESSAGE_DATABASE_NOT_CONFIGURED,
+    SQL_EMPTY_QUERY_MESSAGE,
+    SQL_FORBIDDEN_MESSAGE,
+)
 from src.queries.products_queries import get_products_by_sql_conditions
 from src.services.database.database import get_pool
-from src.toolkit import ensure_safe_select, records_to_json, validate_sql_conditions
-from src.tools._formatting import format_and_return_products
+from src.toolkit import (
+    add_limit_if_missing,
+    ensure_safe_select,
+    format_sql_syntax_error,
+    is_full_sql_query,
+    normalize_runtime_sql,
+    records_to_json,
+    validate_sql_conditions,
+)
+from src.tools._contract import attach_product_ids, fail_response, ok_response
+from src.tools._formatting import calculate_search_limit, format_and_return_products, get_require_photo
 
 logger = logging.getLogger(__name__)
+_NOT_FOUND_MESSAGE = "Товары по указанным условиям не найдены."
+
+
+def _is_sql_syntax_error(error_msg: str) -> bool:
+    lower = error_msg.lower()
+    return "syntax error" in lower or "syntaxerror" in lower
+
+
+def _sql_execution_error_response(error: Exception, sql_query: str) -> tuple[str, dict[str, Any]]:
+    error_msg = str(error)
+    if _is_sql_syntax_error(error_msg):
+        return fail_response(
+            format_sql_syntax_error(error_msg, sql_query, is_full_query=True),
+            error_code="sql_syntax_error",
+        )
+    return fail_response(
+        "Не удалось выполнить SQL запрос: %s" % error,
+        error_code="sql_execution_error",
+    )
 
 
 @tool(response_format="content_and_artifact")
@@ -23,7 +56,7 @@ async def execute_sql_query(
     sql_query: str,
     limit: int | None = None,
     runtime: ToolRuntime[ProductAgentContext, ProductAgentState] = None,
-) -> tuple[str, list[int]]:
+) -> tuple[str, dict[str, Any]]:
     """Выполняет SQL-запрос и возвращает найденные товары.
 
     Принимает WHERE-условия или полный SELECT-запрос.
@@ -38,40 +71,27 @@ async def execute_sql_query(
     - Точное название -> get_product_by_title
     - Нет конкретных условий -> get_random_products
     """
-    sql_query_clean = sql_query.strip()
+    policy = get_agent_policy()
+    sql_query_clean = normalize_runtime_sql(sql_query)
     if not sql_query_clean:
-        return "SQL запрос пустой.", []
-
-    if sql_query_clean.endswith(";"):
-        sql_query_clean = sql_query_clean[:-1].strip()
+        return fail_response(SQL_EMPTY_QUERY_MESSAGE, error_code="empty_query")
 
     try:
         ensure_safe_select(sql_query_clean)
     except ValueError:
-        return "В запросе обнаружена запрещенная команда", []
+        return fail_response(SQL_FORBIDDEN_MESSAGE, error_code="forbidden_query")
 
-    if limit is None:
-        limit = DEFAULT_SQL_LIMIT
+    limit = policy.clamp_sql_limit(limit)
+    require_photo = get_require_photo(runtime)
 
-    require_photo = bool(runtime and runtime.state.get("require_photo", False))
-
-    logger.debug(
-        "[execute_sql_query] require_photo=%s, limit=%s",
-        require_photo,
-        limit,
-    )
-
-    upper_sql = sql_query_clean.upper()
-    is_full_query = upper_sql.startswith("SELECT") or upper_sql.startswith("WITH")
+    logger.debug("[execute_sql_query] require_photo=%s, limit=%s", require_photo, limit)
+    is_full_query = is_full_sql_query(sql_query_clean)
 
     # ------------------------------------------------------------------
     # Full SELECT / WITH query
     # ------------------------------------------------------------------
     if is_full_query:
-        final_query = sql_query_clean
-
-        if not re.search(r"\bLIMIT\s+\d+\b", final_query, re.IGNORECASE):
-            final_query = "%s LIMIT %d" % (final_query, limit)
+        final_query = add_limit_if_missing(sql_query_clean, limit)
 
         logger.info("[execute_sql_query] SQL: %s", final_query)
 
@@ -80,18 +100,11 @@ async def execute_sql_query(
             async with pool.acquire() as conn:
                 result = await conn.fetch(final_query)
         except Exception as e:
-            error_msg = str(e)
             logger.error("[execute_sql_query] Ошибка SQL: %s", e, exc_info=True)
-            if "syntax error" in error_msg.lower() or "syntaxerror" in error_msg.lower():
-                return (
-                    "Ошибка синтаксиса SQL: %s\n\nИспользованный полный SQL-запрос: %s"
-                    % (error_msg, final_query[:200]),
-                    [],
-                )
-            return "Не удалось выполнить SQL запрос: %s" % e, []
+            return _sql_execution_error_response(e, final_query)
 
         if not result:
-            return "По указанному запросу ничего не найдено.", []
+            return fail_response("По указанному запросу ничего не найдено.", error_code="not_found")
 
         json_result = records_to_json(result)
         has_more = False
@@ -110,30 +123,38 @@ async def execute_sql_query(
                 e,
                 sql_conditions[:200],
             )
-            return "SQL условия не прошли валидацию: %s" % e, []
+            return fail_response(
+                "SQL условия не прошли валидацию: %s" % e,
+                error_code="sql_validation_error",
+            )
 
         try:
-            search_limit = (limit * PHOTO_SEARCH_LIMIT_MULTIPLIER) if require_photo else limit
+            search_limit = calculate_search_limit(limit, require_photo)
             products, has_more = await get_products_by_sql_conditions(
                 sql_conditions, search_limit
             )
         except ConnectionError as e:
             logger.error("[execute_sql_query] Нет подключения к БД: %s", e)
-            return "Не настроено подключение к базе данных.", []
+            return fail_response(
+                ERROR_MESSAGE_DATABASE_NOT_CONFIGURED,
+                error_code="database_not_configured",
+            )
         except ValueError as e:
             logger.error(
                 "[execute_sql_query] Синтаксис SQL: %s. Условия: %s",
                 e,
                 sql_conditions[:200],
             )
-            return (
-                "Ошибка синтаксиса SQL: %s\n\nИспользованные SQL-условия (WHERE): %s"
-                % (str(e), sql_conditions[:200]),
-                [],
+            return fail_response(
+                format_sql_syntax_error(str(e), sql_conditions, is_full_query=False),
+                error_code="sql_syntax_error",
             )
         except RuntimeError as e:
             logger.error("[execute_sql_query] Ошибка получения товаров: %s", e)
-            return "Ошибка при получении товаров: %s" % e, []
+            return fail_response(
+                "Ошибка при получении товаров: %s" % e,
+                error_code="query_runtime_error",
+            )
         except Exception as e:
             logger.error(
                 "[execute_sql_query] Неожиданная ошибка: %s. Условия: %s",
@@ -141,10 +162,10 @@ async def execute_sql_query(
                 sql_conditions[:200],
                 exc_info=True,
             )
-            return "Товары по указанным условиям не найдены.", []
+            return fail_response(_NOT_FOUND_MESSAGE, error_code="unexpected_error")
 
         if not products:
-            return "Товары по указанным условиям не найдены.", []
+            return fail_response(_NOT_FOUND_MESSAGE, error_code="not_found")
 
         json_result = [product.model_dump() for product in products]
 
@@ -159,13 +180,16 @@ async def execute_sql_query(
     )
 
     if not product_ids:
-        return text, product_ids
+        return fail_response(text, error_code="not_found_with_photo")
 
     if is_full_query:
-        return "Найдено строк: %d\n\n%s" % (
-            len(product_ids),
-            text.split("\n\n", 1)[-1],
-        ), product_ids
+        return ok_response(
+            "Найдено строк: %d\n\n%s" % (
+                len(product_ids),
+                text.split("\n\n", 1)[-1],
+            ),
+            artifact=attach_product_ids({"limit": limit, "is_full_query": True}, product_ids),
+        )
 
     if has_more:
         text += (
@@ -173,4 +197,7 @@ async def execute_sql_query(
             "Используйте более конкретные критерии для уточнения." % limit
         )
 
-    return text, product_ids
+    return ok_response(
+        text,
+        artifact=attach_product_ids({"limit": limit, "is_full_query": False}, product_ids),
+    )

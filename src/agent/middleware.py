@@ -122,6 +122,14 @@ def _extract_product_ids_from_result(result: Any) -> list[int]:
                     product_id = int(item)
                     if product_id > 0:
                         product_ids.append(product_id)
+        elif isinstance(artifact, dict):
+            raw_product_ids = artifact.get("product_ids", [])
+            if isinstance(raw_product_ids, list):
+                for item in raw_product_ids:
+                    if isinstance(item, (int, str)):
+                        product_id = int(item)
+                        if product_id > 0:
+                            product_ids.append(product_id)
         elif isinstance(artifact, (int, str)):
             product_id = int(artifact)
             if product_id > 0:

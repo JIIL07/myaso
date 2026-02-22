@@ -11,6 +11,7 @@ from langchain_core.tools import tool
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.queries.orders_queries import get_client_orders as get_client_orders_from_db
 from src.toolkit import has_client_phone
+from src.tools._contract import fail_response, ok_response
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +34,16 @@ async def get_client_orders(
         client_phone = runtime.context.client_phone
 
         if not has_client_phone(client_phone):
-            return "Номер телефона клиента не указан.", {}
+            return fail_response("Номер телефона клиента не указан.", error_code="missing_phone")
 
         orders = await get_client_orders_from_db(client_phone)
 
         if not orders:
-            return "Заказы не найдены.", {"order_ids": [], "count": 0}
+            return fail_response(
+                "Заказы не найдены.",
+                error_code="not_found",
+                artifact={"order_ids": [], "count": 0},
+            )
 
         orders_list = []
         order_ids = []
@@ -62,10 +67,11 @@ async def get_client_orders(
 
         result_text = "\n\n---\n\n".join(orders_list)
         artifact = {"order_ids": order_ids, "count": len(orders)}
-        return "Найдено заказов: %d\n\n%s" % (len(orders), result_text), artifact
+        return ok_response("Найдено заказов: %d\n\n%s" % (len(orders), result_text), artifact=artifact)
     except Exception as e:
         logger.error("[get_client_orders] Ошибка: %s", e, exc_info=True)
-        return (
+        return fail_response(
             "Произошла ошибка при получении заказов. "
-            "Попробуйте позже или обратитесь в поддержку."
-        ), {}
+            "Попробуйте позже или обратитесь в поддержку.",
+            error_code="orders_error",
+        )

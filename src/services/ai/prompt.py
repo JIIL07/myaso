@@ -1,10 +1,12 @@
 import logging
 import re
 import time
+from hashlib import sha256
 from typing import Any, Optional
 
 from src.constants import (
     COLUMN_TOPIC,
+    PROMPT_REQUIRED_STRICT,
     COLUMN_VALUE,
     TABLE_SYSTEM,
     PROMPT_CACHE_TTL,
@@ -16,6 +18,20 @@ logger = logging.getLogger(__name__)
 _PROMPT_CACHE: dict[str, tuple[str, float]] = {}
 _langfuse_prompt_service: Optional[Any] = None
 _langfuse_lock = None
+
+
+def _build_prompt_cache_key(
+    *,
+    prompt_name: str,
+    langfuse_label: Optional[str],
+    variables: Optional[dict[str, Any]],
+    context: Optional[str],
+) -> str:
+    serialized_vars = ""
+    if variables:
+        serialized_vars = repr(sorted((str(k), repr(v)) for k, v in variables.items()))
+    var_hash = sha256(serialized_vars.encode("utf-8")).hexdigest()[:12]
+    return f"{prompt_name}:{langfuse_label or ''}:{context or ''}:{var_hash}"
 
 
 def _get_langfuse_service() -> Optional[Any]:
@@ -50,14 +66,21 @@ async def get_prompt(
     langfuse_label: Optional[str] = "production",
     variables: Optional[dict[str, Any]] = None,
     context: Optional[str] = None,
+    required: Optional[bool] = None,
 ) -> Optional[str]:
     current_time = time.time()
+    cache_key = _build_prompt_cache_key(
+        prompt_name=prompt_name,
+        langfuse_label=langfuse_label,
+        variables=variables,
+        context=context,
+    )
 
-    if use_cache and prompt_name in _PROMPT_CACHE:
-        cached_prompt, cache_time = _PROMPT_CACHE[prompt_name]
+    if use_cache and cache_key in _PROMPT_CACHE:
+        cached_prompt, cache_time = _PROMPT_CACHE[cache_key]
         if current_time - cache_time < PROMPT_CACHE_TTL:
             return cached_prompt
-        del _PROMPT_CACHE[prompt_name]
+        del _PROMPT_CACHE[cache_key]
 
     langfuse_service = _get_langfuse_service()
     if langfuse_service and langfuse_service.is_enabled():
@@ -71,7 +94,7 @@ async def get_prompt(
             )
             if prompt_text:
                 if use_cache:
-                    _PROMPT_CACHE[prompt_name] = (prompt_text, current_time)
+                    _PROMPT_CACHE[cache_key] = (prompt_text, current_time)
                 return prompt_text
         except Exception as e:
             logger.debug("[Prompt] Failed to load '%s' from Langfuse: %s", prompt_name, e)
@@ -79,6 +102,10 @@ async def get_prompt(
     if default_prompt is not None:
         logger.warning("[Prompt] '%s' not found, using default", prompt_name)
         return default_prompt
+
+    strict_required = PROMPT_REQUIRED_STRICT if required is None else required
+    if strict_required:
+        raise ValueError("Required prompt '%s' was not found in Langfuse" % prompt_name)
 
     logger.warning("[Prompt] '%s' not found and no default provided", prompt_name)
     return None
