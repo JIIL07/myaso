@@ -26,8 +26,12 @@ from src.toolkit import (
     records_to_json,
     validate_sql_conditions,
 )
-from src.tools._contract import attach_product_ids, fail_response, ok_response
-from src.tools._formatting import calculate_search_limit, format_and_return_products, get_require_photo
+from src.tools.common._contract import attach_product_ids, fail_response, ok_response
+from src.tools.common._formatting import (
+    calculate_search_limit,
+    format_and_return_products,
+    get_require_photo,
+)
 
 logger = logging.getLogger(__name__)
 _NOT_FOUND_MESSAGE = "Товары по указанным условиям не найдены."
@@ -201,3 +205,4 @@ async def execute_sql_query(
         text,
         artifact=attach_product_ids({"limit": limit, "is_full_query": False}, product_ids),
     )
+

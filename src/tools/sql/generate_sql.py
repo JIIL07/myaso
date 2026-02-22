@@ -15,8 +15,8 @@ from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.config.settings import settings
 from src.services.ai.prompt import escape_prompt_variables, get_prompt
 from src.toolkit import ensure_safe_select, normalize_generated_sql, validate_sql_conditions
-from src.tools._contract import fail_response, ok_response
-from src.tools._schema import get_products_table_schema
+from src.tools.common._contract import fail_response, ok_response
+from src.tools.common._schema import get_products_table_schema
 
 logger = logging.getLogger(__name__)
 
@@ -109,3 +109,4 @@ async def generate_sql_from_text(
     except ValueError as e:
         logger.error("[generate_sql] Validation error: %s", e)
         return fail_response(str(e), error_code="sql_generation_error")
+

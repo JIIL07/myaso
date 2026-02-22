@@ -11,7 +11,7 @@ from langchain_core.tools import tool
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.queries.clients_queries import get_client_profile_text
 from src.toolkit import has_client_phone
-from src.tools._contract import fail_response, ok_response
+from src.tools.common._contract import fail_response, ok_response
 
 logger = logging.getLogger(__name__)
 
@@ -40,3 +40,4 @@ async def get_client_profile(
             "Попробуйте позже или обратитесь в поддержку.",
             error_code="profile_error",
         )
+

@@ -9,7 +9,7 @@ from langchain_core.tools import tool
 
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.services.database.database import get_pool
-from src.tools._schema import fetch_table_schema
+from src.tools.common._schema import fetch_table_schema
 
 logger = logging.getLogger(__name__)
 
@@ -80,3 +80,4 @@ async def get_database_schema(
             exc_info=True,
         )
         return "Не удалось получить схему базы данных: %s" % e
+

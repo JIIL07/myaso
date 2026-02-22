@@ -12,8 +12,12 @@ from src.agent.product_agent.policy import get_agent_policy
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.constants import ERROR_MESSAGE_DATABASE_NOT_CONFIGURED
 from src.queries.products_queries import get_random_products as get_random_products_db
-from src.tools._contract import attach_product_ids, fail_response, ok_response
-from src.tools._formatting import calculate_search_limit, format_and_return_products, get_require_photo
+from src.tools.common._contract import attach_product_ids, fail_response, ok_response
+from src.tools.common._formatting import (
+    calculate_search_limit,
+    format_and_return_products,
+    get_require_photo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,3 +66,4 @@ async def get_random_products(
     except Exception as e:
         logger.error("[get_random_products] Ошибка: %s", e, exc_info=True)
         return fail_response("Ошибка при получении товаров: %s" % e, error_code="unexpected_error")
+

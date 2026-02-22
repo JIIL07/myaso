@@ -14,8 +14,8 @@ from src.constants import (
     ERROR_MESSAGE_PRODUCTS_WITH_PHOTOS_NOT_FOUND,
 )
 from src.toolkit import has_product_photo
-from src.tools._contract import attach_product_ids, fail_response, ok_response
-from src.tools._formatting import format_and_return_products, get_require_photo
+from src.tools.common._contract import attach_product_ids, fail_response, ok_response
+from src.tools.common._formatting import format_and_return_products, get_require_photo
 from src.utils.retrievers import PostgresVectorRetriever
 
 logger = logging.getLogger(__name__)
@@ -86,3 +86,4 @@ async def vector_search(
     text, product_ids = await format_and_return_products(products, require_photo=False)
     artifact = attach_product_ids({"query": query, "k": k}, product_ids)
     return ok_response(text, artifact=artifact)
+

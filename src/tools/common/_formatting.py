@@ -50,3 +50,4 @@ async def format_and_return_products(
     result_text, product_ids = await format_products_list(products, system_vars)
 
     return f"Найдено товаров: {len(products)}\n\n{result_text}", product_ids
+

@@ -67,3 +67,4 @@ async def set_photo_requirement(
                 ],
             }
         )
+

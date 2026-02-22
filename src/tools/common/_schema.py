@@ -81,3 +81,4 @@ async def get_products_table_schema() -> str:
         "TABLE: price_history\n\nCOLUMNS:\n%s"
         % (products_schema, price_history_schema)
     )
+

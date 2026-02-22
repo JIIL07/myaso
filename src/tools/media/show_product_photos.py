@@ -11,8 +11,8 @@ from langchain_core.tools import tool
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.services.database.database import get_pool
 from src.toolkit import has_client_phone
-from src.tools._contract import fail_response, ok_response
-from src.tools._telegram import send_telegram_file
+from src.tools.common._contract import fail_response, ok_response
+from src.tools.media._telegram import send_telegram_file
 
 logger = logging.getLogger(__name__)
 
@@ -152,3 +152,4 @@ async def show_product_photos(
             error_code="critical_error",
             artifact=_EMPTY_ARTIFACT.copy(),
         )
+

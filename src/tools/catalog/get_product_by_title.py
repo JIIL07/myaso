@@ -10,8 +10,8 @@ from langchain_core.tools import tool
 
 from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.queries.products_queries import get_product_by_title as get_product_by_title_db
-from src.tools._contract import attach_product_ids, fail_response, ok_response
-from src.tools._formatting import format_and_return_products, get_require_photo
+from src.tools.common._contract import attach_product_ids, fail_response, ok_response
+from src.tools.common._formatting import format_and_return_products, get_require_photo
 
 logger = logging.getLogger(__name__)
 
@@ -62,3 +62,4 @@ async def get_product_by_title(
             exc_info=True,
         )
         return fail_response("Ошибка при поиске товара: %s" % e, error_code="unexpected_error")
+

@@ -33,3 +33,4 @@ def attach_product_ids(
     body = dict(artifact or {})
     body["product_ids"] = [int(pid) for pid in product_ids if isinstance(pid, int) and pid > 0]
     return body
+

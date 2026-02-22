@@ -32,7 +32,7 @@ def test_no_legacy_validator_formatter_imports() -> None:
 
 
 def test_execute_sql_has_no_schema_rewrite_rules() -> None:
-    execute_sql_path = SRC / "tools" / "execute_sql.py"
+    execute_sql_path = SRC / "tools" / "sql" / "execute_sql.py"
     content = execute_sql_path.read_text(encoding="utf-8")
 
     # Keep SQL execution explicit: no hidden auto-prefixing like myaso.<table>.

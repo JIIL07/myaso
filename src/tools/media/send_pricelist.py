@@ -14,8 +14,8 @@ from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.constants import COLUMN_TOPIC, COLUMN_VALUE, TABLE_SYSTEM, SYSTEM_VALUE_PRICELIST
 from src.services.database.database import get_pool
 from src.toolkit import has_client_phone
-from src.tools._contract import fail_response, ok_response
-from src.tools._telegram import send_telegram_file
+from src.tools.common._contract import fail_response, ok_response
+from src.tools.media._telegram import send_telegram_file
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,6 @@ async def send_pricelist(
         if not has_client_phone(client_phone):
             return fail_response("Номер телефона клиента не указан.", error_code="missing_phone")
 
-        # --- Fetch pricelist URL from system table ---
         try:
             pricelist_url = await _get_pricelist_url()
         except Exception as e:
@@ -109,3 +108,4 @@ async def send_pricelist(
             "Сообщи клиенту, что он временно недоступен, но ты можешь помочь с поиском товаров.",
             error_code="critical_error",
         )
+

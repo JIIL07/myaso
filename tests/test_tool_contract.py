@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from src.agent.middleware import _extract_product_ids_from_result
-from src.tools._contract import attach_product_ids, fail_response, ok_response
+from src.tools.common._contract import attach_product_ids, fail_response, ok_response
 
 
 def test_ok_and_fail_response_shape() -> None:

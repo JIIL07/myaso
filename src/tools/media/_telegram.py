@@ -34,3 +34,4 @@ async def send_telegram_file(
         recipient=phone,
         additional_context="файл: %s" % file_url,
     )
+
