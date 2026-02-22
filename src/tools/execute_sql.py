@@ -48,7 +48,7 @@ async def execute_sql_query(
     try:
         ensure_safe_select(sql_query_clean)
     except ValueError:
-        return "Некорректный SQL запрос", []
+        return "В запросе обнаружена запрещенная команда", []
 
     if limit is None:
         limit = DEFAULT_SQL_LIMIT

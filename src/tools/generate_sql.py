@@ -98,8 +98,8 @@ async def _generate_sql_impl(
     try:
         ensure_safe_select(sql_query)
     except ValueError as exc:
-        logger.error("[generate_sql] Некорректный SQL: %s", sql_query[:200])
-        raise ValueError("Некорректный SQL запрос") from exc
+        logger.error("[generate_sql] Опасная SQL команда: %s", sql_query[:200])
+        raise ValueError("Обнаружена опасная SQL команда") from exc
 
     upper = sql_query.upper().strip()
     if not (upper.startswith("SELECT") or upper.startswith("WITH")):
