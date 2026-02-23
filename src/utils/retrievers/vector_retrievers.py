@@ -81,10 +81,10 @@ class PostgresVectorRetriever(BaseRetriever):
                           from_region,
                           photo,
                           order_price_kg,
-                          embedding <-> ($1::vector) AS distance
+                          embedding <-> ($1::extensions.vector) AS distance
                         FROM myaso.products
                         WHERE embedding IS NOT NULL
-                        ORDER BY embedding <-> ($1::vector)
+                        ORDER BY embedding <-> ($1::extensions.vector)
                         LIMIT $2
                         """,
                         vector_str,
@@ -100,10 +100,10 @@ class PostgresVectorRetriever(BaseRetriever):
                           from_region,
                           photo,
                           order_price_kg,
-                          embedding <-> ($1::vector) AS distance
+                          embedding <-> ($1::extensions.vector) AS distance
                         FROM myaso.products
                         WHERE embedding IS NOT NULL
-                        ORDER BY embedding <-> ($1::vector)
+                        ORDER BY embedding <-> ($1::extensions.vector)
                         """,
                         vector_str,
                     )

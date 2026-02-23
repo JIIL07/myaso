@@ -200,11 +200,7 @@ class ConversationService:
         message_received_time = datetime.now()
         await self._ensure_worker_running()
 
-        if self._rate_limiter.is_available():
-            logger.info("[%s] Agent available, processing for %s", context, request.client_phone)
-            return await self._process_conversation_internal(request, message_received_time)
-
-        logger.info("[%s] Agent busy, queuing for %s", context, request.client_phone)
+        logger.info("[%s] Queuing for %s", context, request.client_phone)
         await self._queue_manager.add_task(
             client_phone=request.client_phone,
             message=request.message,
@@ -218,11 +214,7 @@ class ConversationService:
         message_received_time = datetime.now()
         await self._ensure_worker_running()
 
-        if self._rate_limiter.is_available():
-            logger.info("[%s] Agent available, processing for %s", context, request.client_phone)
-            return await self._init_conversation_internal(request, message_received_time)
-
-        logger.info("[%s] Agent busy, queuing for %s", context, request.client_phone)
+        logger.info("[%s] Queuing for %s", context, request.client_phone)
         await self._queue_manager.add_task(
             client_phone=request.client_phone,
             message="",
