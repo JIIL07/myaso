@@ -35,6 +35,7 @@ async def get_pool() -> asyncpg.Pool:
                     max_size=DB_POOL_MAX_SIZE,
                     command_timeout=DB_COMMAND_TIMEOUT,
                     statement_cache_size=0,
+                    server_settings={"search_path": "myaso, public, extensions"},
                 )
             except Exception as e:
                 logger.error("[DB] Ошибка создания pool: %s", e, exc_info=True)

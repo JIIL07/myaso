@@ -12,7 +12,7 @@ from src.agent.product_agent.types import ProductAgentContext, ProductAgentState
 from src.services.database.database import get_pool
 from src.toolkit import has_client_phone
 from src.tools.common._contract import fail_response, ok_response
-from src.tools.media._telegram import send_telegram_file
+from src.services.queue.queue import send_delayed_file
 
 logger = logging.getLogger(__name__)
 
@@ -113,12 +113,12 @@ async def show_product_photos(
                     failed_ids.append(product_id)
                     continue
 
-                ok = await send_telegram_file(
-                    phone=client_phone,
+                msg_id = await send_delayed_file(
+                    client_phone=client_phone,
                     file_url=str(photo_url),
                     caption=product_title,
-                    extension="png",
                 )
+                ok = msg_id is not None
                 (sent_ids if ok else failed_ids).append(product_id)
 
             except Exception as e:

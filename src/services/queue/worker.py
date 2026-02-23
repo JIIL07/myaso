@@ -93,10 +93,8 @@ async def process_single_message(msg: dict[str, Any]) -> None:
             data = message_data
 
         client_phone = data.get("client_phone")
-        message_text = data.get("message")
-
-        if not client_phone or not message_text:
-            logger.warning("[QueueWorker] Missing required fields in message %s", msg_id)
+        if not client_phone:
+            logger.warning("[QueueWorker] Missing client_phone in message %s", msg_id)
             await delete_message("delayed_messages", msg_id)
             return
 
@@ -109,13 +107,32 @@ async def process_single_message(msg: dict[str, Any]) -> None:
             await delete_message("delayed_messages", msg_id)
             return
 
-        logger.info("[QueueWorker] Sending message %s to %s", msg_id, mask_phone(client_phone))
+        file_url = data.get("file_url")
+        if file_url:
+            logger.info("[QueueWorker] Sending file %s to %s", msg_id, mask_phone(client_phone))
+            from src.services.telegram.telegram import send_image
+            caption = data.get("caption", "") or ""
+            success = await send_image(
+                recipient=client_phone,
+                file_url=file_url,
+                caption=caption,
+            )
+        else:
+            message_text = data.get("message")
+            if not message_text:
+                logger.warning("[QueueWorker] Missing message/file_url in message %s", msg_id)
+                await delete_message("delayed_messages", msg_id)
+                return
 
-        from src.services.telegram.telegram import send_message
-        success = await send_message(recipient=client_phone, message=message_text)
+            logger.info("[QueueWorker] Sending message %s to %s", msg_id, mask_phone(client_phone))
+            from src.services.telegram.telegram import send_message
+            success = await send_message(recipient=client_phone, message=message_text)
 
         if not success:
-            logger.warning("[QueueWorker] Failed to send message %s to %s", msg_id, mask_phone(client_phone))
+            logger.warning(
+                "[QueueWorker] Failed to send %s to %s",
+                msg_id, mask_phone(client_phone),
+            )
 
         deleted = await delete_message("delayed_messages", msg_id)
         if deleted:
