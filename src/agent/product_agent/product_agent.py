@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import re
 from datetime import date
@@ -78,8 +77,6 @@ class ProductAgent(BaseAgent):
         self.policy = policy or get_agent_policy()
         self.tool_flags = tool_flags or ToolRegistryFlags()
         self.SYSTEM_PROMPT = ""
-        self._agent_cache: dict[str, Any] = {}
-        self._cached_prompt_hash: Optional[str] = None
 
     def _build_prompt(self, user_input: str, **kwargs: Any) -> str:
         return user_input
@@ -141,21 +138,8 @@ class ProductAgent(BaseAgent):
         )
 
     async def _get_agent(self, tools: Optional[list[Any]] = None) -> Any:
-        current_prompt_hash = hashlib.sha256(self.SYSTEM_PROMPT.encode("utf-8")).hexdigest()
         agent_tools = tools or self.tools
-
-        cache_key = current_prompt_hash
-        if tools is not None:
-            tools_hash = str(sorted(getattr(t, "name", str(t)) for t in agent_tools))
-            cache_key = f"{current_prompt_hash}_{tools_hash}"
-
-        if current_prompt_hash != self._cached_prompt_hash:
-            self._agent_cache.clear()
-            self._cached_prompt_hash = current_prompt_hash
-        if cache_key not in self._agent_cache:
-            self._agent_cache[cache_key] = await self._create_agent(tools=agent_tools)
-
-        return self._agent_cache[cache_key]
+        return await self._create_agent(tools=agent_tools)
 
     async def _load_chat_history(self) -> list[BaseMessage]:
         if not self.memory or not is_memory_initialized(self.memory):
