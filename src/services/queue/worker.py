@@ -3,7 +3,6 @@ import json
 import logging
 from typing import Any
 
-from src.entities import UserMessageRequest
 from src.queries.clients_queries import get_client_send_message
 from src.utils.logger.masking import mask_phone
 from src.constants import QUEUE_CHECK_INTERVAL, VISIBILITY_TIMEOUT, BATCH_SIZE, GRACEFUL_SHUTDOWN_TIMEOUT
@@ -25,7 +24,7 @@ async def process_queue_worker() -> None:
             )
 
             if not messages:
-                logger.debug("[QueueWorker] Queue empty")
+                logger.info("[QueueWorker] Queue empty, waiting %ds", QUEUE_CHECK_INTERVAL)
                 try:
                     await asyncio.wait_for(_shutdown_event.wait(), timeout=QUEUE_CHECK_INTERVAL)
                     break
@@ -110,14 +109,13 @@ async def process_single_message(msg: dict[str, Any]) -> None:
             await delete_message("delayed_messages", msg_id)
             return
 
-        logger.info("[QueueWorker] Processing %s for %s", msg_id, mask_phone(client_phone))
+        logger.info("[QueueWorker] Sending message %s to %s", msg_id, mask_phone(client_phone))
 
-        from src.services.ai.conversation import ConversationService
-        conversation_service = ConversationService.instance()
-        await conversation_service.process_conversation_async(
-            client_phone=client_phone,
-            message=message_text,
-        )
+        from src.services.telegram.telegram import send_message
+        success = await send_message(recipient=client_phone, message=message_text)
+
+        if not success:
+            logger.warning("[QueueWorker] Failed to send message %s to %s", msg_id, mask_phone(client_phone))
 
         deleted = await delete_message("delayed_messages", msg_id)
         if deleted:

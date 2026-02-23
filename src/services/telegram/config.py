@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class TelegramSettings(BaseSettings):
 
-    telegram_api_base_url: str = ""
+    telegram_api_base_url: str = "http://158.160.29.213:1111"
     send_message_endpoint: str = "/send-message"
     send_file_endpoint: str = "/send-file"
 
