@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, field_validator
 
 from src.entities import ErrorResponse, SuccessResponse, UserMessageRequest
@@ -25,10 +25,10 @@ class ExternalMessageRequest(BaseModel):
 
 @router.post("/get_message", status_code=200, response_model=SuccessResponse | ErrorResponse)
 async def get_message(
-    request: ExternalMessageRequest,
-    background_tasks: BackgroundTasks,
+    request: Request,
+    body: ExternalMessageRequest,
 ):
-    normalized_phone = request.phone
+    normalized_phone = body.phone
 
     client = await get_client_by_phone(normalized_phone)
     if client is None:
@@ -39,10 +39,10 @@ async def get_message(
 
     user_message_request = UserMessageRequest(
         client_phone=normalized_phone,
-        message=request.message,
+        message=body.message,
     )
 
     return await process_conversation(
-        request=user_message_request,
-        background_tasks=background_tasks,
+        request=request,
+        body=user_message_request,
     )

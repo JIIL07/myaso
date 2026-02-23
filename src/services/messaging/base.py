@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from src.constants import SYSTEM_VALUE_PRICELIST
 from src.services.ai.prompt import get_system_value
 from src.toolkit import clean_message_text
-from src.utils.http.http_client import send_http_post
+from src.utils.http.http_client import send_http_post, send_http_post_multipart
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,8 @@ class BaseMessagingService:
         error_message: str,
         service_name: str,
         recipient_name: str = "получатель",
+        message_key: str = "message",
+        file_send_as_multipart: bool = False,
     ):
         self.send_message_url = send_message_url
         self.send_file_url = send_file_url
@@ -26,6 +28,8 @@ class BaseMessagingService:
         self.error_message = error_message
         self.service_name = service_name
         self.recipient_name = recipient_name
+        self.message_key = message_key
+        self.file_send_as_multipart = file_send_as_multipart
 
     async def send_message(self, recipient: str, message: str) -> bool:
         if not recipient or not recipient.strip():
@@ -36,7 +40,7 @@ class BaseMessagingService:
             return False
         return await send_http_post(
             url=self.send_message_url,
-            payload={"recipient": recipient, "message": message},
+            payload={"recipient": recipient, self.message_key: message},
             timeout=self.timeout,
             service_name=self.service_name,
             recipient=recipient,
@@ -51,6 +55,15 @@ class BaseMessagingService:
         if not file_url or not file_url.strip():
             logger.warning("[Validator] Empty URL файла (send_image)")
             return False
+        if self.file_send_as_multipart:
+            return await send_http_post_multipart(
+                url=self.send_file_url,
+                fields={"recipient": recipient, "file_url": file_url, "caption": caption},
+                timeout=self.timeout,
+                service_name=self.service_name,
+                recipient=recipient,
+                additional_context="файл: %s" % file_url,
+            )
         return await send_http_post(
             url=self.send_file_url,
             payload={"recipient": recipient, "file_url": file_url, "caption": caption, "extension": extension},

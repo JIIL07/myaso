@@ -35,6 +35,8 @@ def _get_telegram_service() -> BaseMessagingService:
                 error_message=ERROR_MESSAGE_TELEGRAM_FAILED,
                 service_name="telegram",
                 recipient_name="ID получателя",
+                message_key="text",
+                file_send_as_multipart=True,
             )
     
     return _telegram_service

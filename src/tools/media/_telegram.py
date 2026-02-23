@@ -5,7 +5,7 @@ from __future__ import annotations
 from src.config.settings import settings
 from src.constants import HTTP_TIMEOUT_SECONDS
 from src.toolkit import has_client_phone
-from src.utils.http.http_client import send_http_post
+from src.utils.http.http_client import send_http_post_multipart
 
 
 async def send_telegram_file(
@@ -14,21 +14,16 @@ async def send_telegram_file(
     caption: str,
     extension: str = "png",
 ) -> bool:
-    """Send a file to a Telegram user via the bot API proxy."""
+    """Send a file to a Telegram user via the bot API proxy (multipart/form-data)."""
     if not has_client_phone(phone):
         return False
 
     if not file_url or not str(file_url).strip():
         return False
 
-    return await send_http_post(
+    return await send_http_post_multipart(
         url=settings.telegram.send_file_url,
-        payload={
-            "recipient": phone,
-            "file_url": file_url,
-            "caption": caption,
-            "extension": extension,
-        },
+        fields={"recipient": phone, "file_url": file_url, "caption": caption},
         timeout=HTTP_TIMEOUT_SECONDS,
         service_name="telegram",
         recipient=phone,

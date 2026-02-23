@@ -39,7 +39,6 @@ class ImportantOnlyFilter(logging.Filter):
         "[processConversation]",
         "[initConversation]",
         "[resetConversation]",
-        "[QueueWorker]",
         "[Queue]",
         "[main]",
     ]
